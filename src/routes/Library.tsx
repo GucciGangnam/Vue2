@@ -1,3 +1,5 @@
+import { Link } from 'react-router-dom'
+import { Users } from 'lucide-react'
 import { Screen, ScreenHeader } from '@/components/ui/Screen'
 import { Button } from '@/components/ui/Button'
 import { useSession } from '@/stores/sessionStore'
@@ -34,6 +36,14 @@ export function Library() {
           </div>
         </dl>
       )}
+
+      <Link
+        to="/friends"
+        className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-ink-850 px-5 text-base font-medium text-ink-100 transition-colors hover:bg-ink-800 active:bg-ink-700"
+      >
+        <Users className="size-4" aria-hidden />
+        Friends
+      </Link>
 
       <Button variant="ghost" onClick={signOut}>
         Sign out
