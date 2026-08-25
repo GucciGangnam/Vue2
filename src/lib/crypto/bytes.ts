@@ -85,6 +85,22 @@ export function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
   return diff === 0
 }
 
+/**
+ * Base64, for the small blobs that go straight into an `img` src.
+ *
+ * Chunked because `String.fromCharCode(...bytes)` spreads every byte as an
+ * argument and blows the call stack somewhere around 100KB -- which a poster
+ * frame comfortably exceeds.
+ */
+export function toBase64(bytes: Uint8Array): string {
+  const CHUNK = 0x8000
+  let binary = ''
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK))
+  }
+  return btoa(binary)
+}
+
 /** `ArrayBuffer` view helper: WebCrypto returns buffers, we work in views. */
 export function view(buffer: ArrayBuffer): Uint8Array {
   return new Uint8Array(buffer)

@@ -76,6 +76,129 @@ export type Database = {
           },
         ]
       }
+      media: {
+        Row: {
+          chunk_count: number
+          chunk_size: number
+          ciphertext_size: number
+          created_at: string
+          encrypted_metadata: string
+          encrypted_thumbnail: string | null
+          id: string
+          metadata_nonce: string
+          mime_type: string
+          nonce_prefix: string
+          owner_id: string
+          plaintext_size: number
+          status: string
+          storage_path: string
+          thumbnail_nonce: string | null
+        }
+        Insert: {
+          chunk_count: number
+          chunk_size: number
+          ciphertext_size: number
+          created_at?: string
+          encrypted_metadata: string
+          encrypted_thumbnail?: string | null
+          id?: string
+          metadata_nonce: string
+          mime_type: string
+          nonce_prefix: string
+          owner_id: string
+          plaintext_size: number
+          status?: string
+          storage_path: string
+          thumbnail_nonce?: string | null
+        }
+        Update: {
+          chunk_count?: number
+          chunk_size?: number
+          ciphertext_size?: number
+          created_at?: string
+          encrypted_metadata?: string
+          encrypted_thumbnail?: string | null
+          id?: string
+          metadata_nonce?: string
+          mime_type?: string
+          nonce_prefix?: string
+          owner_id?: string
+          plaintext_size?: number
+          status?: string
+          storage_path?: string
+          thumbnail_nonce?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'media_owner_id_fkey'
+            columns: ['owner_id']
+            isOneToOne: false
+            referencedRelation: 'profiles'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      media_keys: {
+        Row: {
+          created_at: string
+          ephemeral_public_key: string
+          granted_by: string
+          hkdf_salt: string
+          id: string
+          media_id: string
+          nonce: string
+          recipient_id: string
+          version: number
+          wrapped_key: string
+        }
+        Insert: {
+          created_at?: string
+          ephemeral_public_key: string
+          granted_by: string
+          hkdf_salt: string
+          id?: string
+          media_id: string
+          nonce: string
+          recipient_id: string
+          version?: number
+          wrapped_key: string
+        }
+        Update: {
+          created_at?: string
+          ephemeral_public_key?: string
+          granted_by?: string
+          hkdf_salt?: string
+          id?: string
+          media_id?: string
+          nonce?: string
+          recipient_id?: string
+          version?: number
+          wrapped_key?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'media_keys_granted_by_fkey'
+            columns: ['granted_by']
+            isOneToOne: false
+            referencedRelation: 'profiles'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'media_keys_media_id_fkey'
+            columns: ['media_id']
+            isOneToOne: false
+            referencedRelation: 'media'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'media_keys_recipient_id_fkey'
+            columns: ['recipient_id']
+            isOneToOne: false
+            referencedRelation: 'profiles'
+            referencedColumns: ['id']
+          },
+        ]
+      }
       profiles: {
         Row: {
           avatar_hue: number
@@ -176,8 +299,11 @@ export type Database = {
         }[]
       }
       generate_friend_code: { Args: never; Returns: string }
+      has_media_key: { Args: { p_media_id: string }; Returns: boolean }
       has_pending_request_with: { Args: { p_other: string }; Returns: boolean }
       is_friend_of_caller: { Args: { p_other: string }; Returns: boolean }
+      media_object_readable: { Args: { p_name: string }; Returns: boolean }
+      owns_media: { Args: { p_media_id: string }; Returns: boolean }
     }
     Enums: { [_ in never]: never }
     CompositeTypes: { [_ in never]: never }
@@ -193,3 +319,5 @@ export type TablesUpdate<T extends keyof PublicSchema['Tables']> =
   PublicSchema['Tables'][T]['Update']
 
 export type Profile = Tables<'profiles'>
+export type MediaRow = Tables<'media'>
+export type MediaKeyRow = Tables<'media_keys'>
