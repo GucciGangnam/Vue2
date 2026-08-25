@@ -104,9 +104,40 @@ export const useSession = create<SessionState>((set, get) => ({
 
     // A key cached on this device means no password prompt on refresh.
     const cached = await getIdentityKey(userId)
+    if (cached) {
+      set({
+        status: 'ready',
+        identityKey: cached,
+        publicKey: vault.publicKey,
+        transientPassword: null,
+      })
+      return
+    }
+
+    // Signing in on a new device: we already hold the password from the form,
+    // so unlock with it rather than asking for the same thing twice.
+    const justEntered = get().transientPassword
+    if (justEntered) {
+      try {
+        const key = await unlockWithPassword(vault.record, justEntered)
+        await putIdentityKey(userId, key)
+        set({
+          status: 'ready',
+          identityKey: key,
+          publicKey: vault.publicKey,
+          transientPassword: null,
+        })
+        return
+      } catch {
+        // The account password can legitimately differ from the vault password:
+        // a Supabase email reset changes the former and cannot touch the latter.
+        // Fall through and ask.
+      }
+    }
+
     set({
-      status: cached ? 'ready' : 'locked',
-      identityKey: cached,
+      status: 'locked',
+      identityKey: null,
       publicKey: vault.publicKey,
       transientPassword: null,
     })
