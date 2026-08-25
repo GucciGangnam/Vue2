@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { Link } from 'react-router-dom'
-import { AlertTriangle, Film, Loader2, Share2, Trash2, Upload, Users, X } from 'lucide-react'
+import { AlertTriangle, Film, Loader2, Play, Share2, Trash2, Upload, Users, X } from 'lucide-react'
 import { Avatar } from '@/components/ui/Avatar'
 import { Button } from '@/components/ui/Button'
 import { Screen } from '@/components/ui/Screen'
@@ -266,6 +266,16 @@ function MediaCard({
         )}
 
         <div className="flex flex-wrap gap-2">
+          {item.status === 'ready' && item.title && (
+            <Link
+              to={`/watch/${item.id}`}
+              className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-lamp-500 px-4 text-sm font-medium text-ink-950 hover:bg-lamp-400"
+            >
+              <Play className="size-4" aria-hidden />
+              Watch
+            </Link>
+          )}
+
           {item.isOwn && incomplete && (
             <>
               <input

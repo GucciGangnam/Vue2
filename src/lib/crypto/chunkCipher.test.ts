@@ -16,6 +16,7 @@ import {
   generateContentKey,
   generateNoncePrefix,
   maxPlaintextFor,
+  planFetchWindows,
   planRange,
   plaintextChunkLength,
   type ChunkParams,
@@ -362,5 +363,72 @@ describe('decryptRange', () => {
     const truncated = stored.subarray(plan.ctStart, plan.ctEnd) // one byte short
 
     await expect(decryptRange(key, params, plan, truncated)).rejects.toThrow()
+  })
+})
+
+describe('planFetchWindows', () => {
+  const size = CHUNK * 3 + 5 // 4 chunks, last one short
+  const params = { chunkSize: CHUNK, chunkCount: chunkCountFor(size, CHUNK) }
+  const stored = ciphertextSizeFor(size, CHUNK)
+
+  it('covers the whole plan with no gaps and no overlaps', () => {
+    const plan = planRange(params, size, 0, size - 1)
+    const windows = planFetchWindows(plan, params, size, 2)
+
+    expect(windows.map((w) => [w.firstChunk, w.lastChunk])).toEqual([
+      [0, 1],
+      [2, 3],
+    ])
+    expect(windows[0]?.ctStart).toBe(0)
+    expect(windows[1]?.ctStart).toBe(windows[0]!.ctEnd + 1)
+    expect(windows.at(-1)?.ctEnd).toBe(stored - 1)
+  })
+
+  it('clamps the final window to the object, since the last chunk is short', () => {
+    const plan = planRange(params, size, 0, size - 1)
+    const windows = planFetchWindows(plan, params, size, 8)
+
+    expect(windows).toHaveLength(1)
+    expect(windows[0]?.ctEnd).toBe(stored - 1)
+    // Naively this would run past the end of the stored object.
+    expect(windows[0]?.ctEnd).toBeLessThan(4 * (CHUNK + GCM_TAG_BYTES) - 1)
+  })
+
+  it('starts at the plan, not at the file', () => {
+    const plan = planRange(params, size, CHUNK * 2, CHUNK * 2 + 10)
+    const windows = planFetchWindows(plan, params, size, 4)
+
+    expect(windows).toHaveLength(1)
+    expect(windows[0]?.firstChunk).toBe(2)
+    expect(windows[0]?.ctStart).toBe(2 * (CHUNK + GCM_TAG_BYTES))
+  })
+
+  it('emits one window per chunk when asked to', () => {
+    const plan = planRange(params, size, 0, size - 1)
+    expect(planFetchWindows(plan, params, size, 1)).toHaveLength(4)
+  })
+
+  it('rejects a nonsense window size', () => {
+    const plan = planRange(params, size, 0, size - 1)
+    expect(() => planFetchWindows(plan, params, size, 0)).toThrow(/at least one chunk/)
+  })
+
+  it('windows decrypt independently and reassemble the original bytes', async () => {
+    const plaintext = pattern(size)
+    const { key, params: full, stored: object } = await seal(plaintext)
+    const plan = planRange(full, size, 0, size - 1)
+    const windows = planFetchWindows(plan, full, size, 3)
+
+    const out: number[] = []
+    for (const window of windows) {
+      const slice = object.subarray(window.ctStart, window.ctEnd + 1)
+      const storedChunk = CHUNK + GCM_TAG_BYTES
+      for (let i = window.firstChunk; i <= window.lastChunk; i++) {
+        const offset = (i - window.firstChunk) * storedChunk
+        const piece = slice.subarray(offset, Math.min(offset + storedChunk, slice.length))
+        out.push(...(await decryptChunk(key, full, i, piece)))
+      }
+    }
+    expect(out).toEqual([...plaintext])
   })
 })

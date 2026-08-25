@@ -255,6 +255,54 @@ export function planRange(
   }
 }
 
+/** One contiguous ciphertext fetch covering a run of whole chunks. */
+export interface FetchWindow {
+  firstChunk: number
+  lastChunk: number
+  /** Inclusive ciphertext byte range for this window. */
+  ctStart: number
+  ctEnd: number
+}
+
+/**
+ * Split a plan into contiguous ciphertext fetches.
+ *
+ * One request per chunk would be correct and unusably slow: the project runs in
+ * Tokyo, so a full read of a 46-chunk file would spend eleven seconds in round
+ * trips alone before any decryption happened. Fetching a run of chunks at once
+ * amortises that, while still letting the response be streamed and the memory
+ * stay bounded by one window rather than the whole range.
+ *
+ * Windows never straddle a chunk boundary, so each one decrypts independently.
+ */
+export function planFetchWindows(
+  plan: RangePlan,
+  params: Pick<ChunkParams, 'chunkSize' | 'chunkCount'>,
+  plaintextSize: number,
+  windowChunks: number,
+): FetchWindow[] {
+  if (!Number.isInteger(windowChunks) || windowChunks < 1) {
+    throw new RangeError(`window must be at least one chunk, got ${windowChunks}`)
+  }
+
+  const storedChunkSize = params.chunkSize + GCM_TAG_BYTES
+  const ciphertextSize = plaintextSize + params.chunkCount * GCM_TAG_BYTES
+  const windows: FetchWindow[] = []
+
+  for (let first = plan.firstChunk; first <= plan.lastChunk; first += windowChunks) {
+    const last = Math.min(first + windowChunks - 1, plan.lastChunk)
+    windows.push({
+      firstChunk: first,
+      lastChunk: last,
+      ctStart: first * storedChunkSize,
+      // The final chunk is short, so the computed end can overshoot the object.
+      ctEnd: Math.min((last + 1) * storedChunkSize, ciphertextSize) - 1,
+    })
+  }
+
+  return windows
+}
+
 /**
  * Decrypt the ciphertext a `RangePlan` asked for and return exactly the
  * requested plaintext bytes.
