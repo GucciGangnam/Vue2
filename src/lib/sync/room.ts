@@ -320,9 +320,30 @@ export async function inviteToWatch(input: {
   await addRoomMember(input.roomId, input.recipientId)
 }
 
+/**
+ * Seat somebody, including somebody who was here before.
+ *
+ * A duplicate is not always a no-op. Somebody who left, or who the owner
+ * removed, still has a row -- so a bare insert conflicts, changes nothing, and
+ * leaves them exactly as removed as they were, while the interface reports a
+ * successful invitation. Re-inviting is the owner's decision to reverse that,
+ * so it puts them back to `invited`.
+ *
+ * Narrowed to the two states that mean "not here": re-inviting somebody who is
+ * already watching must not knock them back to the doorstep.
+ */
 async function addRoomMember(roomId: string, userId: string): Promise<void> {
   const { error } = await supabase.from('room_members').insert({ room_id: roomId, user_id: userId })
-  if (error && error.code !== '23505') throw error
+  if (!error) return
+  if (error.code !== '23505') throw error
+
+  const { error: reseatError } = await supabase
+    .from('room_members')
+    .update({ state: 'invited' })
+    .eq('room_id', roomId)
+    .eq('user_id', userId)
+    .in('state', ['left', 'kicked'])
+  if (reseatError) throw reseatError
 }
 
 export async function setMemberState(

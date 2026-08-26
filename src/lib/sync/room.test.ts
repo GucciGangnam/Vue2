@@ -14,6 +14,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({
   shareMedia: vi.fn(),
   insert: vi.fn(),
+  update: vi.fn(),
   order: [] as string[],
 }))
 
@@ -30,6 +31,17 @@ vi.mock('@/lib/supabase', () => ({
       insert: (row: unknown) => {
         mocks.order.push(`insert ${table}`)
         return mocks.insert(row)
+      },
+      update: (patch: Record<string, unknown>) => {
+        mocks.order.push(`update ${table} to ${String(patch.state)}`)
+        const chain = {
+          eq: () => chain,
+          in: (_column: string, states: string[]) => {
+            mocks.order.push(`only when ${states.join('/')}`)
+            return mocks.update()
+          },
+        }
+        return chain
       },
     }),
   },
@@ -49,6 +61,7 @@ beforeEach(() => {
   mocks.order.length = 0
   mocks.shareMedia.mockReset().mockResolvedValue(undefined)
   mocks.insert.mockReset().mockResolvedValue({ error: null })
+  mocks.update.mockReset().mockResolvedValue({ error: null })
 })
 
 describe('inviteToWatch', () => {
@@ -81,9 +94,25 @@ describe('inviteToWatch', () => {
     expect(mocks.order).toEqual(['grant key'])
   })
 
-  it('survives being invited twice, which is a duplicate membership and not an error', async () => {
+  it('puts somebody who was removed back on the roster rather than silently doing nothing', async () => {
+    // The row already exists, so the insert conflicts. Left alone, that reports
+    // a successful invitation while the guest stays exactly as removed as they
+    // were -- and they are invisible in both panels, so nobody can tell.
     mocks.insert.mockResolvedValue({ error: { code: '23505' } })
     await expect(inviteToWatch(invitation)).resolves.toBeUndefined()
+    expect(mocks.order).toEqual([
+      'grant key',
+      'insert room_members',
+      'update room_members to invited',
+      'only when left/kicked',
+    ])
+  })
+
+  it('will not knock somebody who is already watching back to the doorstep', async () => {
+    mocks.insert.mockResolvedValue({ error: { code: '23505' } })
+    await inviteToWatch(invitation)
+    // The narrowing is the guarantee, so it is the thing asserted.
+    expect(mocks.order).toContain('only when left/kicked')
   })
 })
 

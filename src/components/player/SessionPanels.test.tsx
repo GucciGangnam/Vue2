@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
-import { ViewersPanel, type SessionControls } from './SessionPanels'
+import { InvitePanel, ViewersPanel, type SessionControls } from './SessionPanels'
 import type { RoomMember } from '@/lib/sync/room'
 
 /**
@@ -84,5 +84,52 @@ describe('a guest with no key', () => {
     renderRoster({ isOwner: false, self: ada, keyHolders: new Set<string>() })
     expect(screen.getByText('They cannot decrypt this yet.')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Send the key' })).not.toBeInTheDocument()
+  })
+})
+
+describe('a guest who was removed', () => {
+  const removed = member({ userId: 'Ada', state: 'kicked' })
+
+  function renderInvite(over: Partial<SessionControls> = {}) {
+    const invite = vi.fn().mockResolvedValue(undefined)
+    const controls = {
+      room: { ownerId: 'Grace', controlMode: 'open' },
+      members: [grace, removed],
+      self: grace,
+      isOwner: true,
+      friends: [{ id: 'Ada', displayName: 'Ada', avatarHue: 200 }],
+      connection: 'live',
+      clockUncertaintyMs: 40,
+      keyHolders: new Set<string>(),
+      forceSync: vi.fn(),
+      invite,
+      remove: vi.fn(),
+      setOwnerOnly: vi.fn(),
+      stop: vi.fn(),
+      ...over,
+    } as unknown as SessionControls
+
+    render(
+      <MemoryRouter>
+        <InvitePanel controls={controls} />
+      </MemoryRouter>,
+    )
+    return { invite }
+  }
+
+  it('can be asked back, rather than counting as already here', () => {
+    renderInvite()
+    expect(screen.getByRole('button', { name: 'Invite' })).toBeInTheDocument()
+  })
+
+  it('is not offered while they are actually watching', () => {
+    renderInvite({ members: [grace, member({ userId: 'Ada' })] })
+    expect(screen.queryByRole('button', { name: 'Invite' })).not.toBeInTheDocument()
+    expect(screen.getByText('Everyone you know is already here.')).toBeInTheDocument()
+  })
+
+  it('is not offered while they are invited and simply have not arrived', () => {
+    renderInvite({ members: [grace, member({ userId: 'Ada', state: 'invited' })] })
+    expect(screen.queryByRole('button', { name: 'Invite' })).not.toBeInTheDocument()
   })
 })

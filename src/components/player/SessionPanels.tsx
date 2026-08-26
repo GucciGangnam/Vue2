@@ -126,7 +126,11 @@ export function InvitePanel({ controls }: { controls: SessionControls }) {
   const [error, setError] = useState<string | null>(null)
   const [invited, setInvited] = useState<string[]>([])
 
-  const alreadyHere = new Set(members.map((member) => member.userId))
+  // `watchers`, not `members`: somebody who left or was removed still has a row
+  // and is emphatically not already here. Filtering on the raw roster made them
+  // unreachable -- absent from the list of people watching, and absent from the
+  // list of people you could ask, so a removed guest could never be let back in.
+  const alreadyHere = new Set(watchers(members).map((member) => member.userId))
   const invitable = friends.filter((friend) => !alreadyHere.has(friend.id))
 
   async function ask(friendId: string) {
