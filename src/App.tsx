@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { Loader2 } from 'lucide-react'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { Friends } from './routes/Friends'
 import { Library } from './routes/Library'
 import { Player } from './routes/Player'
@@ -21,6 +22,10 @@ export default function App() {
   const status = useSession((s) => s.status)
   const pendingRecoveryPhrase = useSession((s) => s.pendingRecoveryPhrase)
   const initialize = useSession((s) => s.initialize)
+  // Keying the boundary by path means navigating away from a screen that
+  // crashed clears the error, rather than stranding the user on the fallback
+  // until they reload.
+  const { pathname } = useLocation()
 
   useEffect(() => initialize(), [initialize])
 
@@ -52,13 +57,15 @@ export default function App() {
   if (status === 'locked') return <Unlock />
 
   return (
-    <Routes>
-      <Route path="/" element={<Navigate to="/library" replace />} />
-      <Route path="/library" element={<Library />} />
-      <Route path="/friends" element={<Friends />} />
-      <Route path="/watch/:mediaId" element={<Player />} />
-      <Route path="/room/:roomId" element={<Room />} />
-      <Route path="*" element={<Navigate to="/library" replace />} />
-    </Routes>
+    <ErrorBoundary key={pathname}>
+      <Routes>
+        <Route path="/" element={<Navigate to="/library" replace />} />
+        <Route path="/library" element={<Library />} />
+        <Route path="/friends" element={<Friends />} />
+        <Route path="/watch/:mediaId" element={<Player />} />
+        <Route path="/room/:roomId" element={<Room />} />
+        <Route path="*" element={<Navigate to="/library" replace />} />
+      </Routes>
+    </ErrorBoundary>
   )
 }

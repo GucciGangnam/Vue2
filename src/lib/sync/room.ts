@@ -19,6 +19,7 @@
 import { supabase } from '@/lib/supabase'
 import type { RoomMemberRow, RoomRow } from '@/lib/database.types'
 import { bestSample, ClockOffset, sampleOffset, type ClockSample } from './clock'
+import type { ChannelStatus } from './connection'
 import type { PlaybackAnchor } from './timeline'
 
 export type PlaybackAction = 'play' | 'pause' | 'seek'
@@ -170,6 +171,10 @@ function asMemberState(value: string): MemberState {
   return value === 'joined' || value === 'left' || value === 'kicked' ? value : 'invited'
 }
 
+function asChannelStatus(value: string): ChannelStatus {
+  return value === 'CHANNEL_ERROR' || value === 'TIMED_OUT' ? value : 'CLOSED'
+}
+
 /** The owner is added to the roster by a trigger, not by this call. */
 export async function createRoom(mediaId: string, ownerId: string): Promise<string> {
   const { data, error } = await supabase
@@ -282,6 +287,13 @@ export interface RoomHandlers {
   /** Optimistic: fast, unordered, no `seq`. Apply, but do not trust. */
   onIntent: (intent: PlaybackIntent) => void
   onMembersChanged: () => void
+  /**
+   * Channel liveness. Realtime rejoins by itself, so without this a drop is
+   * invisible -- and because `postgres_changes` has no replay, everything that
+   * happened during the gap is lost. The caller uses this to re-read the
+   * authoritative row, which is the same thing a late joiner does.
+   */
+  onStatusChange?: (status: ChannelStatus) => void
 }
 
 /**
@@ -317,7 +329,12 @@ export function subscribeToRoom(
       if (!intent || intent.actorId === selfId) return
       handlers.onIntent(intent)
     })
-    .subscribe()
+    .subscribe((status) => {
+      // Supabase widens this to a string union that includes states we do not
+      // model; anything unrecognised is treated as "not subscribed", which is
+      // the safe reading.
+      handlers.onStatusChange?.(status === 'SUBSCRIBED' ? 'SUBSCRIBED' : asChannelStatus(status))
+    })
 
   return {
     broadcast: (intent) => {

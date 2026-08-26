@@ -14,9 +14,13 @@
  *   1. **No unauthenticated bytes reach the media element.** A chunk whose GCM
  *      tag fails is a hard error that tears down the response body. There is no
  *      path here that returns partial, zero-filled or unverified data.
- *   2. **Nothing is cached.** Responses carry `no-store`, and we never put
- *      plaintext into the Cache API. The whole point is that the decrypted
- *      video exists only for as long as it is being watched.
+ *   2. **No decrypted byte is ever cached.** Stream responses carry `no-store`
+ *      and nothing on the streaming path goes near the Cache API. The whole
+ *      point is that the decrypted video exists only while it is being
+ *      watched. The worker does keep an app-shell cache (Phase 8) so the app
+ *      opens offline, and the two must never meet: `routeFor` decides
+ *      `stream` before it considers any caching rule, and `routing.test.ts`
+ *      pins that ordering.
  *
  * State lives in IndexedDB, not in this worker's memory. A service worker is
  * terminated and restarted at the browser's discretion; over the length of a
@@ -38,10 +42,24 @@ import {
   unsatisfiedContentRange,
 } from '@/lib/media/httpRange'
 import { probeMp4Bytes } from './probeAsset'
+import { isCacheable, routeFor, STREAM_PREFIX } from './routing'
 
 declare const self: ServiceWorkerGlobalScope
 
-export const STREAM_PREFIX = '/__stream/'
+export { STREAM_PREFIX }
+
+/**
+ * The app shell cache. Bumping the name is how a deploy evicts the old one --
+ * see the `activate` handler.
+ *
+ * Note what is *not* here: any build manifest. The worker is a plain Rollup
+ * entry with no precache list injected (D27), so the shell is filled in at
+ * runtime, from what the app actually asks for. That means offline works from
+ * the second visit rather than the first, which is the right trade for not
+ * putting Workbox in the path of the decryptor.
+ */
+const SHELL_CACHE = 'vue2-shell-v1'
+const SHELL_DOCUMENT = '/index.html'
 
 /**
  * Reserved media id for the capability probe. The file itself is inlined so the
@@ -59,25 +77,89 @@ const WINDOW_CHUNKS = 8
 const REFRESH_TIMEOUT_MS = 8000
 const REFRESH_POLL_MS = 150
 
-self.addEventListener('install', () => {
+self.addEventListener('install', (event) => {
   // Take over immediately: the player screen that just registered this worker
   // is the one that needs it, and waiting for a navigation would strand it.
   void self.skipWaiting()
+  // Best effort. A failed shell fetch must not fail the installation and
+  // leave the origin with no decryptor at all.
+  event.waitUntil(
+    caches
+      .open(SHELL_CACHE)
+      .then((cache) => cache.add(SHELL_DOCUMENT))
+      .catch(() => undefined),
+  )
 })
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(self.clients.claim())
+  event.waitUntil(
+    (async () => {
+      // A new build ships a new shell; the old one must not outlive it.
+      const names = await caches.keys()
+      await Promise.all(
+        names.filter((name) => name !== SHELL_CACHE).map((name) => caches.delete(name)),
+      )
+      await self.clients.claim()
+    })(),
+  )
 })
 
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url)
-  // Anything that is not ours passes straight through to the network. This
-  // worker is a media decryptor, not a cache.
-  if (url.origin !== self.location.origin) return
-  if (!url.pathname.startsWith(STREAM_PREFIX)) return
+  const route = routeFor(event.request, url, self.location.origin)
 
-  event.respondWith(serve(event.request, url))
+  switch (route) {
+    case 'stream':
+      event.respondWith(serve(event.request, url))
+      return
+    case 'navigate':
+      event.respondWith(serveShell(event.request))
+      return
+    case 'asset':
+      event.respondWith(serveAsset(event.request))
+      return
+    case 'passthrough':
+      return
+  }
 })
+
+/**
+ * Network first, shell second.
+ *
+ * Deliberately not cache-first: a deploy has to be able to reach the user, and
+ * an app that pins itself to yesterday's build is worse than one that is slow
+ * to open. The cache is the answer to "offline", not to "slow".
+ */
+async function serveShell(request: Request): Promise<Response> {
+  try {
+    const response = await fetch(request)
+    if (isCacheable(response)) {
+      const copy = response.clone()
+      void caches.open(SHELL_CACHE).then((cache) => cache.put(SHELL_DOCUMENT, copy))
+    }
+    return response
+  } catch {
+    const cached = await caches.match(SHELL_DOCUMENT)
+    if (cached) return cached
+    return new Response('This app is offline and has not been opened here before.', {
+      status: 503,
+      headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' },
+    })
+  }
+}
+
+/** Cache first: these filenames contain a content hash, so a hit cannot be stale. */
+async function serveAsset(request: Request): Promise<Response> {
+  const cached = await caches.match(request)
+  if (cached) return cached
+
+  const response = await fetch(request)
+  if (isCacheable(response)) {
+    const copy = response.clone()
+    void caches.open(SHELL_CACHE).then((cache) => cache.put(request, copy))
+  }
+  return response
+}
 
 async function serve(request: Request, url: URL): Promise<Response> {
   const mediaId = decodeURIComponent(url.pathname.slice(STREAM_PREFIX.length))

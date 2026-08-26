@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/Button'
 import { HoldToUnlock, UnlockButton } from '@/components/player/HoldToUnlock'
 import { formatDuration } from '@/lib/format'
 import { openStream, type OpenStream } from '@/lib/media/playback'
+import { connectionMessage } from '@/lib/sync/connection'
 import {
   endRoom,
   inviteToRoom,
@@ -49,6 +50,7 @@ export function Room() {
     members,
     self,
     error: syncError,
+    connection,
     clockUncertaintyMs,
     lastAction,
     play,
@@ -58,6 +60,7 @@ export function Room() {
     join,
   } = useRoom(roomId)
   const { friends } = useFriends(userId)
+  const connectionNotice = connectionMessage(connection)
 
   const [src, setSrc] = useState<string | null>(null)
   const [streamError, setStreamError] = useState<string | null>(null)
@@ -336,6 +339,15 @@ export function Room() {
             </div>
           )}
         </section>
+      )}
+
+      {connectionNotice && (
+        <p
+          role="status"
+          className="rounded-xl border border-lamp-500/40 bg-lamp-500/10 px-4 py-3 text-center text-sm text-lamp-200"
+        >
+          {connectionNotice}
+        </p>
       )}
 
       <p className="text-center text-xs text-ink-700">

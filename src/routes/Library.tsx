@@ -13,6 +13,7 @@ import {
   Users,
   X,
 } from 'lucide-react'
+import { InstallPrompt } from '@/components/InstallPrompt'
 import { Avatar } from '@/components/ui/Avatar'
 import { Button } from '@/components/ui/Button'
 import { Screen } from '@/components/ui/Screen'
@@ -40,12 +41,20 @@ export function Library() {
   const { rooms, start } = useRooms()
   const navigate = useNavigate()
   const [sharing, setSharing] = useState<LibraryItem | null>(null)
+  const [roomError, setRoomError] = useState<string | null>(null)
 
   const openRooms = rooms.filter((room) => room.myState !== 'left' && room.myState !== 'kicked')
 
   async function watchTogether(item: LibraryItem) {
-    const roomId = await start.mutateAsync(item.id)
-    void navigate(`/room/${roomId}`)
+    setRoomError(null)
+    try {
+      const roomId = await start.mutateAsync(item.id)
+      void navigate(`/room/${roomId}`)
+    } catch (cause) {
+      // Creation is rate limited, so this can genuinely refuse. The database
+      // words that refusal for a reader, so pass it straight through.
+      setRoomError(cause instanceof Error ? cause.message : 'Could not open a room just now.')
+    }
   }
 
   return (
@@ -67,6 +76,8 @@ export function Library() {
           <Users className="size-5" aria-hidden />
         </Link>
       </header>
+
+      <InstallPrompt />
 
       <UploadPanel upload={upload} />
 
@@ -96,6 +107,12 @@ export function Library() {
             })}
           </ul>
         </section>
+      )}
+
+      {roomError && (
+        <p role="alert" className="text-sm text-danger-500">
+          {roomError}
+        </p>
       )}
 
       {error && (

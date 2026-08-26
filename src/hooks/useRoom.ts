@@ -11,6 +11,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ClockOffset } from '@/lib/sync/clock'
 import {
+  nextConnectionState,
+  shouldRemeasureClock,
+  shouldResync,
+  type ChannelStatus,
+  type ConnectionState,
+} from '@/lib/sync/connection'
+import {
   decideCorrection,
   expectedPositionMs,
   NUDGE_THRESHOLD_MS,
@@ -51,6 +58,12 @@ export interface RoomSync {
   members: RoomMember[]
   self: RoomMember | null
   error: string | null
+  /**
+   * Whether this client is still hearing the room. Worth showing: a silent
+   * reconnection is indistinguishable from a room where nobody has touched
+   * anything, and only one of those is safe to keep watching through.
+   */
+  connection: ConnectionState
   /** Round-trip uncertainty on the clock, for the diagnostics line. */
   clockUncertaintyMs: number
   /** "Ada paused" — resolved against the roster during render. */
@@ -78,6 +91,7 @@ export function useRoom(roomId: string): RoomSync {
     at: number
   } | null>(null)
   const [clockUncertaintyMs, setClockUncertaintyMs] = useState(0)
+  const [connection, setConnection] = useState<ConnectionState>('connecting')
 
   // Owned here rather than taken as an argument: this hook is the only thing
   // that drives the element, and mutating a ref handed in from outside is both
@@ -87,6 +101,10 @@ export function useRoom(roomId: string): RoomSync {
   const anchor = useRef<PlaybackAnchor | null>(null)
   const appliedSeq = useRef(0)
   const broadcastRef = useRef<((intent: never) => void) | null>(null)
+  // Mirrors `connection` so the callbacks below can read it without being
+  // rebuilt on every transition, which would tear down the subscription.
+  const connectionRef = useRef<ConnectionState>('connecting')
+  const lastStatus = useRef<ChannelStatus>('CLOSED')
 
   /**
    * Put the element where the anchor says it should be, right now.
@@ -127,6 +145,80 @@ export function useRoom(roomId: string): RoomSync {
     }
     if (!next.isPlaying && !element.paused) element.pause()
   }, [])
+
+  /* ---- staying in step across interruptions ------------------------------- */
+
+  /**
+   * Re-read the authoritative state and land on it.
+   *
+   * This is deliberately the same thing a late joiner does, because it is the
+   * same problem: the anchor is an absolute fact, so re-reading the row is
+   * enough to be exactly in step again without any replay of what was missed.
+   */
+  const resync = useCallback(
+    async (remeasureClock: boolean) => {
+      try {
+        if (remeasureClock) {
+          const measured = await measureClock()
+          clock.current = measured
+          setClockUncertaintyMs(Math.round(measured.uncertaintyMs))
+        }
+        const [fresh, roster] = await Promise.all([loadRoom(roomId), listRoomMembers(roomId)])
+        setRoom(fresh)
+        setMembers(roster)
+        appliedSeq.current = fresh.anchor.seq
+        applyAnchor(fresh.anchor, true)
+      } catch {
+        // Still unreachable, or the room has ended. Whichever it is, the next
+        // status change tries again; failing loudly here would only replace a
+        // recoverable gap with an error screen.
+      }
+    },
+    [applyAnchor, roomId],
+  )
+
+  const updateConnection = useCallback(
+    (status: ChannelStatus, isOnline: boolean) => {
+      lastStatus.current = status
+      const previous = connectionRef.current
+      const next = nextConnectionState(status, isOnline, previous)
+      if (next === previous) return
+
+      const remeasure = shouldRemeasureClock(previous, next)
+      const resyncNeeded = shouldResync(previous, next)
+      connectionRef.current = next
+      setConnection(next)
+      if (resyncNeeded) void resync(remeasure)
+    },
+    [resync],
+  )
+
+  /**
+   * The device's own view of connectivity, and coming back from the background.
+   *
+   * Foregrounding is handled separately from the state machine and always
+   * resyncs, even from `live`. A phone that has been asleep may hold a channel
+   * that still reports `SUBSCRIBED` over a socket that quietly died, so waiting
+   * for a status change would mean waiting forever. The clock is re-measured
+   * too: a sleeping device's clock slews, and a wrong offset is exactly what
+   * makes a client confidently out of step (D30).
+   */
+  useEffect(() => {
+    const onConnectivity = () => updateConnection(lastStatus.current, navigator.onLine)
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible') return
+      onConnectivity()
+      void resync(true)
+    }
+    window.addEventListener('online', onConnectivity)
+    window.addEventListener('offline', onConnectivity)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.removeEventListener('online', onConnectivity)
+      window.removeEventListener('offline', onConnectivity)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
+  }, [resync, updateConnection])
 
   /* ---- load, subscribe ---------------------------------------------------- */
 
@@ -183,6 +275,10 @@ export function useRoom(roomId: string): RoomSync {
           .then((roster) => live && setMembers(roster))
           .catch(() => {})
       },
+      onStatusChange: (status) => {
+        if (!live) return
+        updateConnection(status, navigator.onLine)
+      },
     })
     broadcastRef.current = subscription.broadcast as unknown as (intent: never) => void
 
@@ -190,8 +286,10 @@ export function useRoom(roomId: string): RoomSync {
       live = false
       subscription.unsubscribe()
       broadcastRef.current = null
+      connectionRef.current = 'connecting'
+      lastStatus.current = 'CLOSED'
     }
-  }, [roomId, selfId, applyAnchor])
+  }, [roomId, selfId, applyAnchor, updateConnection])
 
   /* ---- drift correction --------------------------------------------------- */
 
@@ -310,6 +408,7 @@ export function useRoom(roomId: string): RoomSync {
     members,
     self,
     error,
+    connection,
     clockUncertaintyMs,
     lastAction,
     play: () => act('play', positionNow()),

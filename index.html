@@ -3,6 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- iOS ignores the manifest's icons and uses this one. -->
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <meta
       name="viewport"
       content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1"
@@ -11,6 +14,11 @@
     <meta name="color-scheme" content="dark" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Vue2" />
+    <meta
+      name="description"
+      content="Watch encrypted video together, in lockstep. Your videos are encrypted on your device; the server only ever holds ciphertext."
+    />
     <title>Vue2</title>
   </head>
   <body>
