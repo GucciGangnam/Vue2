@@ -16,6 +16,7 @@ import { useRoom } from '@/hooks/useRoom'
 import { useRooms } from '@/hooks/useRooms'
 import { connectionMessage } from '@/lib/sync/connection'
 import {
+  canControlPlayback,
   endRoom,
   resolveWatchTarget,
   setControlMode,
@@ -147,8 +148,9 @@ function Together({ mediaId, roomId }: { mediaId: string; roomId: string }) {
   // Only the owner may read the grants on their own media, and they are also
   // the only person who could do anything about one being missing.
   const shares = useShares(isOwner ? mediaId : null)
-  const canControl =
-    stream.status.kind === 'ready' && (!ownerOnly || isOwner || self?.canControl === true)
+  // The same rule the sync hook and the database use, from one place, so the
+  // transport is never offered for an action that would be refused.
+  const canControl = stream.status.kind === 'ready' && canControlPlayback(room, self, userId)
 
   /**
    * Arriving *is* accepting. Under the old model an invitation was a room you

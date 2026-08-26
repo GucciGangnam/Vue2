@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { bestSample, ClockOffset, sampleOffset } from './clock'
 import {
+  clampToDuration,
   decideCorrection,
   expectedPositionMs,
+  hasRunOut,
   NUDGE_RATE,
   shouldApply,
   type PlaybackAnchor,
@@ -157,5 +159,89 @@ describe('shouldApply', () => {
 
   it('accepts the first event against a fresh client', () => {
     expect(shouldApply(1, 0)).toBe(true)
+  })
+})
+
+/**
+ * A session left playing when the film runs out.
+ *
+ * `is_playing` stays true and the anchor keeps describing a position that
+ * climbs forever, so an hour later it claims an hour past the credits. The
+ * client that notices stops the session; this is the arithmetic that holds
+ * even when no client was there to notice.
+ */
+describe('running past the end', () => {
+  const ONE_HOUR = 60 * 60 * 1000
+  const film = 20 * 60 * 1000
+
+  /** Playing from the start, an hour ago, of a twenty-minute film. */
+  const abandoned: PlaybackAnchor = {
+    seq: 9,
+    isPlaying: true,
+    positionMs: 0,
+    anchorServerTimeMs: 1_000_000,
+  }
+  const anHourLater = abandoned.anchorServerTimeMs + ONE_HOUR
+
+  it('would otherwise claim a position long past the credits', () => {
+    expect(expectedPositionMs(abandoned, anHourLater)).toBe(ONE_HOUR)
+  })
+
+  it('lands on the last frame instead, once the length is known', () => {
+    expect(expectedPositionMs(abandoned, anHourLater, film)).toBe(film)
+  })
+
+  it('clamps a paused anchor that was written past the end too', () => {
+    const stranded: PlaybackAnchor = { ...abandoned, isPlaying: false, positionMs: ONE_HOUR }
+    expect(expectedPositionMs(stranded, anHourLater, film)).toBe(film)
+  })
+
+  it('leaves an ordinary position alone', () => {
+    const midway: PlaybackAnchor = { ...abandoned, positionMs: 5 * 60 * 1000, isPlaying: false }
+    expect(expectedPositionMs(midway, anHourLater, film)).toBe(5 * 60 * 1000)
+  })
+
+  it('seeks to the end rather than past it', () => {
+    const correction = decideCorrection(abandoned, 0, anHourLater, film)
+    expect(correction).toEqual({ kind: 'seek', toMs: film })
+  })
+
+  it('is reported as run out, so somebody present can stop the session', () => {
+    expect(hasRunOut(abandoned, anHourLater, film)).toBe(true)
+  })
+
+  it('is not reported as run out one millisecond before the end', () => {
+    const nearly = abandoned.anchorServerTimeMs + film - 1
+    expect(hasRunOut(abandoned, nearly, film)).toBe(false)
+  })
+
+  it('is reported exactly on the final millisecond', () => {
+    expect(hasRunOut(abandoned, abandoned.anchorServerTimeMs + film, film)).toBe(true)
+  })
+
+  it('never reports a paused session as run out, however stale its anchor', () => {
+    const paused: PlaybackAnchor = { ...abandoned, isPlaying: false, positionMs: ONE_HOUR }
+    expect(hasRunOut(paused, anHourLater, film)).toBe(false)
+  })
+})
+
+describe('clampToDuration', () => {
+  it('passes a position through when the length is not known yet', () => {
+    // `duration` is NaN until metadata loads and Infinity for a live stream.
+    // Both have to mean "do not clamp", never "clamp to nothing".
+    expect(clampToDuration(5000, null)).toBe(5000)
+    expect(clampToDuration(5000, NaN)).toBe(5000)
+    expect(clampToDuration(5000, Infinity)).toBe(5000)
+    expect(clampToDuration(5000, 0)).toBe(5000)
+  })
+
+  it('never returns a negative position', () => {
+    expect(clampToDuration(-1, 1000)).toBe(0)
+    expect(clampToDuration(-1, null)).toBe(0)
+  })
+
+  it('keeps a position that is already inside the film', () => {
+    expect(clampToDuration(999, 1000)).toBe(999)
+    expect(clampToDuration(1000, 1000)).toBe(1000)
   })
 })

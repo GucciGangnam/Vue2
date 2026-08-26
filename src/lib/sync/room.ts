@@ -162,6 +162,28 @@ export async function listRoomMembers(roomId: string): Promise<RoomMember[]> {
 }
 
 /**
+ * May this person move playback?
+ *
+ * The same rule `set_playback_state` enforces, restated on the client so the
+ * interface can be honest about it rather than offering a button that will be
+ * refused. D2: anyone joined may control, unless the owner has kept the
+ * controls to themselves.
+ *
+ * Here rather than in a component because two things need it and they must not
+ * disagree -- the player, to decide whether to enable the transport, and the
+ * sync hook, to decide whether it is allowed to stop a film that has run out.
+ */
+export function canControlPlayback(
+  room: Room | null,
+  self: RoomMember | null,
+  selfId: string,
+): boolean {
+  if (!room || self?.state !== 'joined') return false
+  if (room.controlMode !== 'owner_only') return true
+  return room.ownerId === selfId || self.canControl
+}
+
+/**
  * The roster as a viewer thinks of it: everyone here or on their way.
  *
  * People who left, and people who were removed, are members of the row but not

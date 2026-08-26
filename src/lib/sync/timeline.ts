@@ -16,16 +16,60 @@ export interface PlaybackAnchor {
 }
 
 /**
+ * Never past the end of the film.
+ *
+ * An anchor is an intention -- "playing, from here, since then" -- and nothing
+ * in it knows how long the video is. If a session is left playing when the film
+ * runs out, the computed position keeps climbing for as long as the row says
+ * `is_playing`, so an hour later it claims a position an hour past the credits
+ * and every arriving client is dragged to the last frame.
+ *
+ * `endReached` is what stops that happening in the first place. This is the
+ * belt to its braces, and it is needed because the two failures are different:
+ * that one needs somebody present to notice, and this one holds even when the
+ * last viewer closed their laptop mid-film and nobody was left to say so.
+ *
+ * A duration of `null`, `NaN` or `Infinity` means the element has not loaded
+ * its metadata yet, in which case there is nothing to clamp against and the
+ * position passes through untouched.
+ */
+export function clampToDuration(positionMs: number, durationMs: number | null): number {
+  const floored = Math.max(0, positionMs)
+  if (durationMs === null || !Number.isFinite(durationMs) || durationMs <= 0) return floored
+  return Math.min(floored, durationMs)
+}
+
+/**
  * Position is stored as an anchor, not as a live number, which is what makes
  * late joining exact: a client that arrives an hour after the last pause reads
  * two numbers and computes the answer, rather than asking anyone.
  */
-export function expectedPositionMs(anchor: PlaybackAnchor, serverNowMs: number): number {
-  if (!anchor.isPlaying) return anchor.positionMs
+export function expectedPositionMs(
+  anchor: PlaybackAnchor,
+  serverNowMs: number,
+  durationMs: number | null = null,
+): number {
+  if (!anchor.isPlaying) return clampToDuration(anchor.positionMs, durationMs)
   // Guard against a server instant that appears to precede the anchor, which a
   // clock re-measurement mid-playback can briefly produce.
   const elapsed = Math.max(0, serverNowMs - anchor.anchorServerTimeMs)
-  return anchor.positionMs + elapsed
+  return clampToDuration(anchor.positionMs + elapsed, durationMs)
+}
+
+/**
+ * Has this session run past the end of its film?
+ *
+ * Asked of the anchor rather than of the element, because it has to be true for
+ * a client that has only just arrived and whose element is still at zero.
+ */
+export function hasRunOut(
+  anchor: PlaybackAnchor,
+  serverNowMs: number,
+  durationMs: number | null,
+): boolean {
+  if (!anchor.isPlaying) return false
+  if (durationMs === null || !Number.isFinite(durationMs) || durationMs <= 0) return false
+  return expectedPositionMs(anchor, serverNowMs) >= durationMs
 }
 
 export type Correction =
@@ -45,8 +89,9 @@ export function decideCorrection(
   anchor: PlaybackAnchor,
   actualPositionMs: number,
   serverNowMs: number,
+  durationMs: number | null = null,
 ): Correction {
-  const expected = expectedPositionMs(anchor, serverNowMs)
+  const expected = expectedPositionMs(anchor, serverNowMs, durationMs)
   const delta = expected - actualPositionMs
   const size = Math.abs(delta)
 

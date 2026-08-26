@@ -20,12 +20,14 @@ import {
 import {
   decideCorrection,
   expectedPositionMs,
+  hasRunOut,
   NUDGE_THRESHOLD_MS,
   SEEK_THRESHOLD_MS,
   shouldApply,
   type PlaybackAnchor,
 } from '@/lib/sync/timeline'
 import {
+  canControlPlayback,
   listRoomMembers,
   loadRoom,
   measureClock,
@@ -40,6 +42,18 @@ import { useSession } from '@/stores/sessionStore'
 
 /** ARCHITECTURE.md: drift is checked twice a second. */
 const DRIFT_INTERVAL_MS = 500
+
+/**
+ * The element's duration in milliseconds, or `null` before it knows.
+ *
+ * `HTMLMediaElement.duration` is `NaN` until metadata loads and `Infinity` for
+ * a live stream, and both of those must mean "do not clamp" rather than
+ * "clamp to nothing".
+ */
+function durationMs(element: HTMLVideoElement | null): number | null {
+  if (!element || !Number.isFinite(element.duration) || element.duration <= 0) return null
+  return element.duration * 1000
+}
 /** Re-measure the clock occasionally; laptops sleep and clocks slew. */
 const CLOCK_REFRESH_MS = 5 * 60_000
 
@@ -105,6 +119,9 @@ export function useRoom(roomId: string): RoomSync {
   // rebuilt on every transition, which would tear down the subscription.
   const connectionRef = useRef<ConnectionState>('connecting')
   const lastStatus = useRef<ChannelStatus>('CLOSED')
+  // Read by the drift interval, which must not be torn down and rebuilt every
+  // time the roster changes just to know this.
+  const mayControl = useRef(false)
 
   /**
    * Put the element where the anchor says it should be, right now.
@@ -131,13 +148,17 @@ export function useRoom(roomId: string): RoomSync {
     const element = video.current
     if (!element) return
 
-    const expected = expectedPositionMs(next, clock.current.now())
+    const expected = expectedPositionMs(next, clock.current.now(), durationMs(element))
     const tolerance = authoritative ? NUDGE_THRESHOLD_MS : SEEK_THRESHOLD_MS
     if (Math.abs(element.currentTime * 1000 - expected) > tolerance) {
       element.currentTime = expected / 1000
       element.playbackRate = 1
     }
-    if (next.isPlaying && element.paused) {
+    // `element.ended` is excluded deliberately: play() on a finished element
+    // restarts it from the beginning, so a session still marked playing would
+    // replay the film from zero, be seeked back to the end by the next anchor,
+    // and do it again. The drift loop stops the session instead.
+    if (next.isPlaying && element.paused && !element.ended) {
       void element.play().catch(() => {
         // Autoplay refused until the user interacts. The drift loop will keep
         // trying, and the play button is right there.
@@ -291,41 +312,13 @@ export function useRoom(roomId: string): RoomSync {
     }
   }, [roomId, selfId, applyAnchor, updateConnection])
 
-  /* ---- drift correction --------------------------------------------------- */
+  /* ---- who we are, and what the clock is doing ----------------------------- */
+
+  const self = members.find((member) => member.userId === selfId) ?? null
 
   useEffect(() => {
-    const timer = setInterval(() => {
-      const element = video.current
-      const current = anchor.current
-      if (!element || !current || element.seeking || element.readyState < 2) return
-
-      // Re-assert play/pause, not just position. An element can stop on its own
-      // -- a stall, a decode hiccup, a refused autoplay -- and without this the
-      // room would sit "playing" while this client stared at a frozen frame,
-      // because nothing else re-checks until the next anchor arrives.
-      if (current.isPlaying && element.paused) {
-        void element.play().catch(() => {})
-      } else if (!current.isPlaying && !element.paused) {
-        element.pause()
-      }
-
-      const correction = decideCorrection(current, element.currentTime * 1000, clock.current.now())
-      switch (correction.kind) {
-        case 'seek':
-          element.currentTime = correction.toMs / 1000
-          element.playbackRate = 1
-          break
-        case 'rate':
-          element.playbackRate = correction.playbackRate
-          break
-        case 'none':
-          if (element.playbackRate !== 1) element.playbackRate = 1
-          break
-      }
-    }, DRIFT_INTERVAL_MS)
-
-    return () => clearInterval(timer)
-  }, [])
+    mayControl.current = canControlPlayback(room, self, selfId)
+  }, [room, self, selfId])
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -382,6 +375,73 @@ export function useRoom(roomId: string): RoomSync {
     [applyAnchor, roomId, selfId],
   )
 
+  /* ---- drift correction ---------------------------------------------------
+
+     Below `act` rather than above it, because the loop is now allowed to act:
+     a film that has run out has to be stopped by somebody, and the client
+     noticing it is the only one in a position to. */
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const element = video.current
+      const current = anchor.current
+      if (!element || !current || element.seeking || element.readyState < 2) return
+
+      const total = durationMs(element)
+
+      // The film has run out. Nothing else notices: `is_playing` stays true,
+      // the computed position climbs for as long as the row says so, and every
+      // client arriving afterwards is dragged to the last frame. So somebody
+      // present has to say the session is over.
+      //
+      // Checked before the re-assert below, because an ended element is also a
+      // paused one and re-asserting play on it restarts the film from zero.
+      //
+      // Several clients can reach this in the same instant, and that is fine
+      // rather than coordinated: the guard is `isPlaying`, and `act` broadcasts
+      // optimistically on the fast path -- well under 100ms against a 500ms
+      // tick -- so the first one to notice flips everybody else's local anchor
+      // and they fall silent. A duplicate would only set the same state again.
+      if (current.isPlaying && total !== null && mayControl.current) {
+        if (element.ended || hasRunOut(current, clock.current.now(), total)) {
+          act('pause', total)
+          return
+        }
+      }
+
+      // Re-assert play/pause, not just position. An element can stop on its own
+      // -- a stall, a decode hiccup, a refused autoplay -- and without this the
+      // room would sit "playing" while this client stared at a frozen frame,
+      // because nothing else re-checks until the next anchor arrives.
+      if (current.isPlaying && element.paused && !element.ended) {
+        void element.play().catch(() => {})
+      } else if (!current.isPlaying && !element.paused) {
+        element.pause()
+      }
+
+      const correction = decideCorrection(
+        current,
+        element.currentTime * 1000,
+        clock.current.now(),
+        total,
+      )
+      switch (correction.kind) {
+        case 'seek':
+          element.currentTime = correction.toMs / 1000
+          element.playbackRate = 1
+          break
+        case 'rate':
+          element.playbackRate = correction.playbackRate
+          break
+        case 'none':
+          if (element.playbackRate !== 1) element.playbackRate = 1
+          break
+      }
+    }, DRIFT_INTERVAL_MS)
+
+    return () => clearInterval(timer)
+  }, [act])
+
   const attachVideo = useCallback((element: HTMLVideoElement | null) => {
     video.current = element
   }, [])
@@ -390,8 +450,6 @@ export function useRoom(roomId: string): RoomSync {
     const element = video.current
     return element ? element.currentTime * 1000 : (anchor.current?.positionMs ?? 0)
   }, [])
-
-  const self = members.find((member) => member.userId === selfId) ?? null
 
   const lastAction = lastEvent
     ? {
@@ -411,7 +469,11 @@ export function useRoom(roomId: string): RoomSync {
     connection,
     clockUncertaintyMs,
     lastAction,
-    play: () => act('play', positionNow()),
+    // A finished film restarts rather than sitting on the last frame doing
+    // nothing, which is what pressing play plainly promises. The element would
+    // do this by itself -- play() on an ended element seeks to zero -- but the
+    // anchor has to agree, or the drift loop pulls it straight back.
+    play: () => act('play', video.current?.ended ? 0 : positionNow()),
     pause: () => act('pause', positionNow()),
     seek: (positionMs: number) => act('seek', positionMs),
     // Re-issuing the current state bumps seq, which makes every client

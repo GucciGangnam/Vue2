@@ -35,7 +35,7 @@ vi.mock('@/lib/supabase', () => ({
   },
 }))
 
-const { inviteToWatch, watchers } = await import('./room')
+const { canControlPlayback, inviteToWatch, watchers } = await import('./room')
 
 const invitation = {
   roomId: 'room-1',
@@ -106,5 +106,43 @@ describe('watchers', () => {
       member('removed', 'kicked'),
     ])
     expect(roster.map((m) => m.userId)).toEqual(['grace', 'ada'])
+  })
+})
+
+describe('canControlPlayback', () => {
+  const room = (over: Record<string, unknown> = {}) =>
+    ({ ownerId: 'grace', controlMode: 'open', ...over }) as never
+  const member = (over: Record<string, unknown> = {}) =>
+    ({ userId: 'ada', role: 'viewer', state: 'joined', canControl: false, ...over }) as never
+
+  it('lets anybody who has joined control an open session (D2)', () => {
+    expect(canControlPlayback(room(), member(), 'ada')).toBe(true)
+  })
+
+  it('refuses somebody who is only invited, and has not arrived', () => {
+    expect(canControlPlayback(room(), member({ state: 'invited' }), 'ada')).toBe(false)
+  })
+
+  it('refuses somebody who has been removed', () => {
+    expect(canControlPlayback(room(), member({ state: 'kicked' }), 'ada')).toBe(false)
+  })
+
+  it('refuses a viewer when the owner has kept the controls', () => {
+    expect(canControlPlayback(room({ controlMode: 'owner_only' }), member(), 'ada')).toBe(false)
+  })
+
+  it('still lets the owner control their own locked session', () => {
+    const owner = member({ userId: 'grace', role: 'owner' })
+    expect(canControlPlayback(room({ controlMode: 'owner_only' }), owner, 'grace')).toBe(true)
+  })
+
+  it('lets a viewer the owner has trusted control a locked session', () => {
+    const trusted = member({ canControl: true })
+    expect(canControlPlayback(room({ controlMode: 'owner_only' }), trusted, 'ada')).toBe(true)
+  })
+
+  it('refuses before the room or the roster has loaded', () => {
+    expect(canControlPlayback(null, member(), 'ada')).toBe(false)
+    expect(canControlPlayback(room(), null, 'ada')).toBe(false)
   })
 })
