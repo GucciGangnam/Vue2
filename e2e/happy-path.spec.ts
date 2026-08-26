@@ -3,11 +3,17 @@ import { expect, test, type Page } from '@playwright/test'
 /**
  * The happy path, against the production build and the real project.
  *
- * Read-only on purpose: it signs in, unlocks, reads the library and plays a
- * video. It never uploads, creates a room, or sends a friend request, because
- * those write to the same project the developer uses by hand -- and room
- * creation is rate limited, so a suite that created rooms would eventually
- * fail because it had run too often.
+ * Nearly read-only: it signs in, unlocks, reads the library and plays a video.
+ * It still never uploads, invites, or sends a friend request, because those
+ * write to the same project the developer uses by hand.
+ *
+ * **One write is now unavoidable and is fine.** Since Phase 9 a video *is* its
+ * session, so the owner opening one gets or creates its room. That was the
+ * reason this suite avoided rooms -- creation is limited to ten an hour (D35)
+ * and a suite that made one per run would eventually refuse to run at all.
+ * `get_or_create_room` retires the concern: there is a unique constraint on
+ * `rooms(media_id)`, so the first run of this suite creates one row for
+ * `test-pattern-40s` and every run after it reuses that row.
  *
  * Grace is the account to drive: her vault password matches her auth password,
  * so signing in unlocks in one step (D16). Ada's deliberately does not.
@@ -21,6 +27,9 @@ const GRACE = {
 }
 /** 46 MB across 46 chunks, with a burnt-in timecode. */
 const TEST_PATTERN_MEDIA_ID = '21b09679-6074-41a9-b1c0-03f087877b88'
+/** 20 minutes of real content. The room kept when Phase 9 collapsed the five. */
+const EPISODE_ONE_MEDIA_ID = 'a26b9606-75ed-4c98-b32d-029afc83e714'
+const EPISODE_ONE_ROOM_ID = '358cfa1f-216c-490c-987b-0a479c304e4c'
 
 async function signIn(page: Page) {
   await page.goto('/')
@@ -43,8 +52,11 @@ test.describe('the happy path', () => {
     // Titles are ciphertext on the server, so seeing one is proof the whole
     // chain worked: session, vault unlock, key unwrap, metadata decrypt.
     await expect(page.getByText('test-pattern-40s')).toBeVisible()
-    await expect(page.getByText('Episode 1').first()).toBeVisible()
     await expect(page.getByRole('heading', { name: GRACE.displayName })).toBeVisible()
+
+    // Once, not five times. This is the symptom that started Phase 9: five
+    // rooms against one video made the library look like five copies of it.
+    await expect(page.getByText('Episode 1')).toHaveCount(1)
   })
 
   test('plays an encrypted video and seeks to the right place', async ({ page }) => {
@@ -70,14 +82,29 @@ test.describe('the happy path', () => {
     // Seeking is the operation that has broken before while playback looked
     // healthy: a media element aborts and re-requests when it seeks, so a
     // stream torn down between requests fails here and nowhere else.
-    await video.evaluate((el: HTMLVideoElement) => {
-      el.currentTime = 31
-    })
+    //
+    // It is driven through the transport rather than by writing `currentTime`,
+    // and that is not squeamishness. Since Phase 9 the owner opening their own
+    // video is a shared session, and a shared session's drift loop pulls the
+    // element back to the anchor twice a second -- so a position poked straight
+    // onto the element is dragged off again within 500ms, exactly as designed.
+    // Going through the scrubber moves the anchor itself, which is what a
+    // person does.
+    await page.getByRole('button', { name: 'Show the controls' }).click()
+    const pause = page.getByRole('button', { name: 'Pause', exact: true })
+    if (await pause.isVisible()) await pause.click()
+
+    // Paused, the chrome no longer fades, so the scrubber stays reachable.
+    await page.getByRole('slider', { name: 'Seek' }).fill('31')
+
     await expect
       .poll(async () => video.evaluate((el: HTMLVideoElement) => el.seeking), { timeout: 30_000 })
       .toBe(false)
-
-    expect(await video.evaluate((el: HTMLVideoElement) => el.currentTime)).toBeCloseTo(31, 0)
+    await expect
+      .poll(async () => video.evaluate((el: HTMLVideoElement) => el.currentTime), {
+        timeout: 30_000,
+      })
+      .toBeCloseTo(31, 0)
     expect(await video.evaluate((el: HTMLVideoElement) => el.error)).toBeNull()
   })
 
@@ -111,9 +138,36 @@ test.describe('the happy path', () => {
     await signIn(page)
     // A hard navigation, not client-side routing: this is what a refresh does,
     // and it is what an SPA rewrite has to get right.
-    const response = await page.goto(`/room/358cfa1f-216c-490c-987b-0a479c304e4c`)
+    const response = await page.goto(`/watch/${EPISODE_ONE_MEDIA_ID}`)
     expect(response?.status()).toBe(200)
-    await expect(page.getByText(/in the room/i)).toBeVisible()
+    await expect(page.locator('video')).toBeVisible()
+  })
+
+  test('sends an old /room link to the video it was a room for', async ({ page }) => {
+    await signIn(page)
+    // /room/:id was the shared-watching screen until Phase 9 folded it into
+    // /watch/:mediaId. Links to it exist, so it redirects rather than 404s.
+    const response = await page.goto(`/room/${EPISODE_ONE_ROOM_ID}`)
+    expect(response?.status()).toBe(200)
+    await expect(page).toHaveURL(new RegExp(`/watch/${EPISODE_ONE_MEDIA_ID}$`), {
+      timeout: 30_000,
+    })
+  })
+
+  test('never says the word "room" to the person watching', async ({ page }) => {
+    await signIn(page)
+    await page.goto(`/watch/${EPISODE_ONE_MEDIA_ID}`)
+    await expect(page.locator('video')).toBeVisible()
+
+    // The owner's controls are where the old /room page went, so open every
+    // one of them before looking. On a desktop viewport they are all in the
+    // sidebar already, which is what this runs at.
+    await expect(page.getByRole('heading', { name: 'Watching' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Invite a friend' })).toBeVisible()
+    await expect(page.getByRole('heading', { name: 'Settings' })).toBeVisible()
+
+    const words = (await page.locator('body').innerText()).match(/\broom\b/gi)
+    expect(words, 'the interface should never say "room"').toBeNull()
   })
 
   test('permits no third-party connection', async ({ page }) => {

@@ -8,11 +8,16 @@ import { defineConfig, devices } from '@playwright/test'
  * network, and about a minute. `verify` is the gate before every commit and
  * has to stay fast and offline. Run these with `npm run test:e2e`.
  *
- * They are also deliberately read-only: no upload, no room creation, no
- * friend requests. Writes would mutate the same production project the
- * developer tests on by hand, and room creation is now rate limited (10 per
- * hour), so a suite that created rooms would eventually fail on its own
- * success.
+ * They are as close to read-only as the app allows: no upload, no invitation,
+ * no friend requests, because writes mutate the same production project the
+ * developer tests on by hand.
+ *
+ * The one exception is unavoidable and is bounded. Since Phase 9 a video *is*
+ * its session, so opening one as its owner gets or creates its room. That used
+ * to be the thing this suite avoided -- creation is limited to ten an hour
+ * (D35) and one per run would eventually fail on its own success -- but
+ * `rooms(media_id)` is unique now, so the first run creates a single row and
+ * every run after it reuses that row.
  *
  * The build is served rather than the dev server, because the service worker
  * is a different artefact in each: dev serves a one-line shim that Vite

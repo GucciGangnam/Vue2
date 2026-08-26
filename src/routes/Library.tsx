@@ -1,14 +1,13 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { Link } from 'react-router-dom'
 import {
   AlertTriangle,
   Film,
   Loader2,
   Play,
+  Radio,
   Share2,
   Trash2,
-  Tv,
   Upload,
   Users,
   X,
@@ -36,26 +35,21 @@ const PHASE_LABEL: Record<UploadProgress['phase'], string> = {
 export function Library() {
   const profile = useSession((s) => s.profile)
   const signOut = useSession((s) => s.signOut)
+  const session = useSession((s) => s.session)
   const { items, isLoading, error, refresh, remove, share, revoke } = useLibrary()
   const upload = useUpload(refresh)
-  const { rooms, start } = useRooms()
-  const navigate = useNavigate()
+  const { rooms } = useRooms()
   const [sharing, setSharing] = useState<LibraryItem | null>(null)
-  const [roomError, setRoomError] = useState<string | null>(null)
 
-  const openRooms = rooms.filter((room) => room.myState !== 'left' && room.myState !== 'kicked')
-
-  async function watchTogether(item: LibraryItem) {
-    setRoomError(null)
-    try {
-      const roomId = await start.mutateAsync(item.id)
-      void navigate(`/room/${roomId}`)
-    } catch (cause) {
-      // Creation is rate limited, so this can genuinely refuse. The database
-      // words that refusal for a reader, so pass it straight through.
-      setRoomError(cause instanceof Error ? cause.message : 'Could not open a room just now.')
-    }
-  }
+  // Somebody else's video, open now, that we were let into. Our own videos are
+  // not listed here: they are already below, and a video *is* its session.
+  const nowStreaming = rooms.filter(
+    (room) =>
+      room.ownerId !== session?.user.id &&
+      room.myState !== 'left' &&
+      room.myState !== 'kicked' &&
+      room.status !== 'ended',
+  )
 
   return (
     <Screen className="justify-start gap-7">
@@ -81,38 +75,46 @@ export function Library() {
 
       <UploadPanel upload={upload} />
 
-      {openRooms.length > 0 && (
+      {nowStreaming.length > 0 && (
         <section className="flex flex-col gap-2">
-          <h2 className="text-sm font-medium text-ink-500">Rooms</h2>
+          <h2 className="flex items-center gap-2 text-sm font-medium text-lamp-500">
+            <Radio className="size-4" aria-hidden />
+            Now streaming
+          </h2>
           <ul className="flex flex-col gap-2">
-            {openRooms.map((room) => {
+            {nowStreaming.map((room) => {
               const item = items.find((candidate) => candidate.id === room.mediaId)
               return (
                 <li key={room.id}>
                   <Link
-                    to={`/room/${room.id}`}
-                    className="flex items-center gap-3 rounded-xl bg-ink-900 p-3 hover:bg-ink-850"
+                    to={`/watch/${room.mediaId}`}
+                    className="flex items-center gap-3 rounded-xl border border-lamp-600/40 bg-lamp-600/10 p-3 hover:bg-lamp-600/20"
                   >
-                    <Tv className="size-5 shrink-0 text-lamp-500" aria-hidden />
+                    <span
+                      className={
+                        room.isPlaying
+                          ? 'size-2.5 shrink-0 animate-pulse rounded-full bg-lamp-500'
+                          : 'size-2.5 shrink-0 rounded-full bg-ink-700'
+                      }
+                      aria-hidden
+                    />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-base text-ink-100">{item?.title ?? 'A video'}</p>
                       <p className="text-xs text-ink-500">
-                        {room.myState === 'invited' ? 'You were invited' : 'You are in this room'}
-                        {room.isPlaying && ' · playing'}
+                        {room.myState === 'invited'
+                          ? 'You were asked to watch this'
+                          : room.isPlaying
+                            ? 'Playing now'
+                            : 'Paused'}
                       </p>
                     </div>
+                    <Play className="size-4 shrink-0 text-lamp-500" aria-hidden />
                   </Link>
                 </li>
               )
             })}
           </ul>
         </section>
-      )}
-
-      {roomError && (
-        <p role="alert" className="text-sm text-danger-500">
-          {roomError}
-        </p>
       )}
 
       {error && (
@@ -141,7 +143,6 @@ export function Library() {
               item={item}
               busy={remove.isPending}
               onShare={() => setSharing(item)}
-              onWatchTogether={() => void watchTogether(item)}
               onDelete={() => remove.mutate(item)}
               onResume={(file) => upload.resume(item.id, file)}
             />
@@ -285,14 +286,12 @@ function MediaCard({
   item,
   busy,
   onShare,
-  onWatchTogether,
   onDelete,
   onResume,
 }: {
   item: LibraryItem
   busy: boolean
   onShare: () => void
-  onWatchTogether: () => void
   onDelete: () => void
   onResume: (file: File) => void
 }) {
@@ -368,17 +367,6 @@ function MediaCard({
                 Finish upload
               </button>
             </>
-          )}
-
-          {item.status === 'ready' && item.title && (
-            <button
-              type="button"
-              onClick={onWatchTogether}
-              className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-ink-850 px-3 text-sm text-ink-100 hover:bg-ink-800"
-            >
-              <Tv className="size-4" aria-hidden />
-              Watch together
-            </button>
           )}
 
           {item.isOwn && item.status === 'ready' && item.title && (

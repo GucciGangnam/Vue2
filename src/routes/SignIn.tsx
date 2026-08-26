@@ -27,7 +27,7 @@ export function SignIn() {
 
   return (
     <Screen>
-      <ScreenHeader title="Welcome back" subtitle="Sign in to your screening room." />
+      <ScreenHeader title="Welcome back" subtitle="Sign in to watch with your friends." />
       <form onSubmit={onSubmit} className="flex flex-col gap-4">
         <TextField
           label="Email"

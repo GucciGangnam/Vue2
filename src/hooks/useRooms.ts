@@ -1,18 +1,18 @@
 /**
- * The rooms a user can currently walk into.
+ * The sessions somebody else has open that you are part of — "Now streaming".
  *
- * RLS already limits this to rooms they own or were invited to, so the query
- * deliberately does not filter by user.
+ * RLS already limits this to rooms you own or were invited to, so the query
+ * deliberately does not filter by user. The owner does not need this list: a
+ * video they own *is* its session, and it is already in their library.
  */
 
 import { useCallback } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { createRoom, inviteToRoom } from '@/lib/sync/room'
-import { shareMedia } from '@/lib/media/library'
+import { inviteToWatch } from '@/lib/sync/room'
 import { supabase } from '@/lib/supabase'
 import { useSession } from '@/stores/sessionStore'
 
-export interface RoomSummary {
+export interface StreamingSession {
   id: string
   mediaId: string
   ownerId: string
@@ -30,7 +30,7 @@ export function useRooms() {
   const query = useQuery({
     queryKey: ['rooms', userId],
     enabled: Boolean(userId),
-    queryFn: async (): Promise<RoomSummary[]> => {
+    queryFn: async (): Promise<StreamingSession[]> => {
       const { data: rows, error } = await supabase
         .from('rooms')
         .select('id, media_id, owner_id, status, is_playing')
@@ -60,36 +60,20 @@ export function useRooms() {
     void queryClient.invalidateQueries({ queryKey: ['rooms', userId] })
   }, [queryClient, userId])
 
-  const start = useMutation({
-    mutationFn: (mediaId: string) => createRoom(mediaId, userId),
-    onSuccess: invalidate,
-  })
-
   /**
-   * Invite someone, granting them the content key if they do not have it.
-   *
-   * A room invitation without a key grant would be an invitation to watch a
-   * black rectangle, so the two travel together. Granting is idempotent enough:
-   * a duplicate insert is swallowed as already-shared.
+   * Ask a friend to watch along. `inviteToWatch` grants the content key in the
+   * same breath — see the note on it for why the two are not separable.
    */
   const invite = useMutation({
-    mutationFn: async (input: { roomId: string; mediaId: string; recipientId: string }) => {
-      try {
-        await shareMedia({
-          mediaId: input.mediaId,
-          ownerId: userId,
-          recipientId: input.recipientId,
-          identityPrivateKey: identityKey as CryptoKey,
-        })
-      } catch (cause) {
-        // Already granted is the common case on a re-invite; anything else is
-        // worth surfacing.
-        const message = cause instanceof Error ? cause.message : ''
-        if (!/duplicate|already/i.test(message)) throw cause
-      }
-      await inviteToRoom(input.roomId, input.recipientId)
-    },
+    mutationFn: (input: { roomId: string; mediaId: string; recipientId: string }) =>
+      inviteToWatch({
+        roomId: input.roomId,
+        mediaId: input.mediaId,
+        ownerId: userId,
+        recipientId: input.recipientId,
+        identityPrivateKey: identityKey as CryptoKey,
+      }),
   })
 
-  return { rooms: query.data ?? [], isLoading: query.isPending, refresh: invalidate, start, invite }
+  return { rooms: query.data ?? [], isLoading: query.isPending, refresh: invalidate, invite }
 }

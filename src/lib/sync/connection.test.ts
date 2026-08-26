@@ -79,7 +79,7 @@ describe('connectionMessage', () => {
     expect(connectionMessage('connecting')).toBeNull()
   })
 
-  it('warns that the room may have moved on', () => {
+  it('warns that everyone else may have moved on', () => {
     // The honest risk is being out of step, not merely being disconnected.
     expect(connectionMessage('offline')).toContain('out of step')
     expect(connectionMessage('reconnecting')).toBe('Reconnecting…')

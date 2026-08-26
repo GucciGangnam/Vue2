@@ -280,7 +280,6 @@ export type Database = {
           media_id: string
           owner_id: string
           position_ms: number
-          require_hold: boolean
           seq: number
           status: string
         }
@@ -295,7 +294,6 @@ export type Database = {
           media_id: string
           owner_id: string
           position_ms?: number
-          require_hold?: boolean
           seq?: number
           status?: string
         }
@@ -310,7 +308,6 @@ export type Database = {
           media_id?: string
           owner_id?: string
           position_ms?: number
-          require_hold?: boolean
           seq?: number
           status?: string
         }
@@ -407,6 +404,7 @@ export type Database = {
         }[]
       }
       generate_friend_code: { Args: never; Returns: string }
+      get_or_create_room: { Args: { p_media_id: string }; Returns: string }
       has_media_key: { Args: { p_media_id: string }; Returns: boolean }
       has_pending_request_with: { Args: { p_other: string }; Returns: boolean }
       in_room: { Args: { p_room_id: string }; Returns: boolean }

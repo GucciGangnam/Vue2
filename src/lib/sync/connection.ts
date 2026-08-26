@@ -83,7 +83,7 @@ export function shouldRemeasureClock(previous: ConnectionState, next: Connection
 export function connectionMessage(state: ConnectionState): string | null {
   switch (state) {
     case 'offline':
-      return 'No connection — you may be out of step with the room.'
+      return 'No connection — you may be out of step with everyone else.'
     case 'reconnecting':
       return 'Reconnecting…'
     case 'connecting':

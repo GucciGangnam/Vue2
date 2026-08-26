@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatBytes, formatDuration, formatPercent } from './format'
+import { formatBytes, formatClock, formatDuration, formatPercent } from './format'
 
 describe('formatBytes', () => {
   it('keeps small sizes whole', () => {
@@ -56,5 +56,17 @@ describe('formatPercent', () => {
 
   it('copes with a total of zero', () => {
     expect(formatPercent(0, 0)).toBe('0%')
+  })
+})
+
+describe('formatClock', () => {
+  it('reads zero as a position, not as unknown', () => {
+    expect(formatClock(0)).toBe('0:00')
+    expect(formatClock(NaN)).toBe('0:00')
+  })
+
+  it('otherwise agrees with formatDuration', () => {
+    expect(formatClock(72)).toBe('1:12')
+    expect(formatClock(3725)).toBe('1:02:05')
   })
 })

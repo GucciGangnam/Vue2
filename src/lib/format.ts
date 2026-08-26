@@ -32,3 +32,15 @@ export function formatPercent(done: number, total: number): string {
   if (total <= 0) return '0%'
   return `${Math.min(100, Math.floor((done / total) * 100))}%`
 }
+
+/**
+ * A playback clock, where zero is a real position rather than "unknown".
+ *
+ * `formatDuration` answers an em dash for zero, which is right for a library
+ * card whose duration failed to decrypt and wrong for a transport sitting at
+ * the start of a film.
+ */
+export function formatClock(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '0:00'
+  return formatDuration(seconds * 1000)
+}

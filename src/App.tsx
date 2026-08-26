@@ -4,8 +4,8 @@ import { Loader2 } from 'lucide-react'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { Friends } from './routes/Friends'
 import { Library } from './routes/Library'
-import { Player } from './routes/Player'
-import { Room } from './routes/Room'
+import { RoomRedirect } from './routes/RoomRedirect'
+import { Watch } from './routes/Watch'
 import { RecoveryPhrase } from './routes/RecoveryPhrase'
 import { SignIn } from './routes/SignIn'
 import { SignUp } from './routes/SignUp'
@@ -62,8 +62,9 @@ export default function App() {
         <Route path="/" element={<Navigate to="/library" replace />} />
         <Route path="/library" element={<Library />} />
         <Route path="/friends" element={<Friends />} />
-        <Route path="/watch/:mediaId" element={<Player />} />
-        <Route path="/room/:roomId" element={<Room />} />
+        <Route path="/watch/:mediaId" element={<Watch />} />
+        {/* Folded into /watch in Phase 9; kept so existing links still land. */}
+        <Route path="/room/:roomId" element={<RoomRedirect />} />
         <Route path="*" element={<Navigate to="/library" replace />} />
       </Routes>
     </ErrorBoundary>
