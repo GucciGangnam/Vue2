@@ -41,6 +41,12 @@ export interface Room {
   mediaId: string
   status: RoomStatus
   controlMode: ControlMode
+  /**
+   * Phase 6: whether controlling playback takes a deliberate three-second
+   * hold. A room-wide setting rather than a per-viewer preference, because the
+   * cost of an accidental tap is paid by everybody watching.
+   */
+  requireHold: boolean
   anchor: PlaybackAnchor
   lastActorId: string | null
 }
@@ -105,6 +111,7 @@ function toRoom(row: RoomRow): Room {
     mediaId: row.media_id,
     status: asStatus(row.status),
     controlMode: row.control_mode === 'owner_only' ? 'owner_only' : 'open',
+    requireHold: row.require_hold,
     lastActorId: row.last_actor_id,
     anchor: {
       seq: row.seq,
@@ -207,6 +214,19 @@ export async function setCanControl(
 
 export async function setControlMode(roomId: string, mode: ControlMode): Promise<void> {
   const { error } = await supabase.from('rooms').update({ control_mode: mode }).eq('id', roomId)
+  if (error) throw error
+}
+
+/**
+ * Turn the locked player on or off for a room. Owner only, enforced by
+ * `rooms_update_owner`; the guard trigger does not care, because this is not
+ * part of the playback anchor.
+ */
+export async function setRequireHold(roomId: string, requireHold: boolean): Promise<void> {
+  const { error } = await supabase
+    .from('rooms')
+    .update({ require_hold: requireHold })
+    .eq('id', roomId)
   if (error) throw error
 }
 

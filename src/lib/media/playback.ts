@@ -46,7 +46,11 @@ const SIGNED_URL_TTL_SECONDS = 3600
 
 const WINDOW_CHUNKS = 8
 const PROBE_TIMEOUT_MS = 6000
-const PROBE_RESULT_KEY = 'vue2:sw-playback'
+/**
+ * Versioned: a cached answer is only meaningful for the probe that produced it,
+ * and this probe asks a strictly harder question than the first one did (D31).
+ */
+const PROBE_RESULT_KEY = 'vue2:sw-playback:v2'
 
 export type PlaybackMode = 'service-worker' | 'staged'
 
@@ -97,12 +101,23 @@ export async function registerStreamWorker(): Promise<ServiceWorkerRegistration 
 }
 
 /**
- * Does a media element's request actually reach the worker?
+ * Can this browser actually play a video the worker serves?
  *
  * `fetch()` being intercepted is not evidence: iOS Safari has intercepted
- * `fetch` while bypassing the worker for `<video>` loads, which is the exact
- * failure this has to catch. So point a real video element at a real file the
- * worker serves, and see whether metadata ever arrives.
+ * `fetch` while bypassing the worker for `<video>` loads. So point a real video
+ * element at a real file the worker serves, and see whether metadata arrives.
+ *
+ * That much was true from the start, and it was still not enough. On WebKit the
+ * media element's request *does* reach the worker -- and then the worker cannot
+ * read the stream record back out of IndexedDB, because a `CryptoKey` stored by
+ * the page deserialises as `undefined` there. Routing worked, serving did not,
+ * and the probe cheerfully reported success on a browser that could not play a
+ * single frame. See docs/DECISIONS.md D31.
+ *
+ * So the probe publishes a throwaway record with a real non-extractable key
+ * first, and the worker refuses to answer until it has read that record and
+ * used its key. The probe now fails wherever a real video would fail, which is
+ * the only property that makes it worth having.
  *
  * The answer is cached per origin. It is a property of the browser, and
  * re-running it on every visit costs a media load for no new information.
@@ -115,6 +130,14 @@ export async function probePlayback(force = false): Promise<boolean> {
 
   const registration = await registerStreamWorker()
   if (!registration) return cacheProbe(false)
+
+  try {
+    await putStreamRecord(await probeRecord())
+  } catch {
+    // If the page cannot even write the record, the worker will certainly not
+    // read one. Take the fallback.
+    return cacheProbe(false)
+  }
 
   const ok = await new Promise<boolean>((resolve) => {
     const video = document.createElement('video')
@@ -130,8 +153,9 @@ export async function probePlayback(force = false): Promise<boolean> {
     }
 
     // A browser that bypasses the worker requests /__stream/__probe from the
-    // network, gets the SPA's index.html back, and fails to decode it. That
-    // shows up as `error`, or as nothing at all -- hence the timeout.
+    // network, gets the SPA's index.html back, and fails to decode it. A
+    // browser that reaches the worker but cannot hand it a usable key gets a
+    // 404. Both show up as `error`, or as nothing at all -- hence the timeout.
     const timer = setTimeout(() => done(false), PROBE_TIMEOUT_MS)
     video.addEventListener('loadedmetadata', () => done(true), { once: true })
     video.addEventListener('error', () => done(false), { once: true })
@@ -139,7 +163,32 @@ export async function probePlayback(force = false): Promise<boolean> {
     video.src = `${STREAM_PREFIX}${PROBE_MEDIA_ID}`
   })
 
+  await deleteStreamRecord(PROBE_MEDIA_ID)
   return cacheProbe(ok)
+}
+
+/**
+ * A record that is real in every way that matters -- a non-extractable AES-GCM
+ * key, stored the same way a film's key is stored -- and points at nothing. The
+ * worker never fetches for the probe; it only has to read this back.
+ */
+async function probeRecord(): Promise<StreamRecord> {
+  const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, [
+    'encrypt',
+    'decrypt',
+  ])
+  return {
+    mediaId: PROBE_MEDIA_ID,
+    key,
+    noncePrefix: new Uint8Array(4),
+    chunkSize: 1,
+    chunkCount: 1,
+    plaintextSize: 1,
+    ciphertextSize: 1 + GCM_TAG_BYTES,
+    mimeType: 'video/mp4',
+    sourceUrl: '',
+    expiresAt: 0,
+  }
 }
 
 function readCachedProbe(): boolean | null {

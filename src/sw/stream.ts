@@ -44,9 +44,11 @@ declare const self: ServiceWorkerGlobalScope
 export const STREAM_PREFIX = '/__stream/'
 
 /**
- * Reserved media id for the capability probe. Answered from an inlined file
- * rather than from IndexedDB, so the probe works before any video exists and
- * tests exactly one thing: whether a media element's request reaches us.
+ * Reserved media id for the capability probe. The file itself is inlined so the
+ * probe works before any video exists, but the probe is only answered once the
+ * worker has read that id's record back out of IndexedDB and used its key --
+ * because reaching the worker is not the same thing as being able to serve. See
+ * docs/DECISIONS.md D31.
  */
 export const PROBE_MEDIA_ID = '__probe'
 
@@ -81,7 +83,7 @@ async function serve(request: Request, url: URL): Promise<Response> {
   const mediaId = decodeURIComponent(url.pathname.slice(STREAM_PREFIX.length))
   if (!mediaId) return problem(400, 'No media id')
 
-  if (mediaId === PROBE_MEDIA_ID) return serveProbe(request)
+  if (mediaId === PROBE_MEDIA_ID) return await serveProbe(request)
 
   const record = await getStreamRecord(mediaId)
   // The page publishes the record before setting `src`, so a miss means the
@@ -136,13 +138,32 @@ async function serve(request: Request, url: URL): Promise<Response> {
 }
 
 /**
- * Answer the probe with a real, complete little video.
+ * Answer the probe with a real, complete little video -- but only if this
+ * worker can do everything serving a real video needs.
+ *
+ * The first version of this answered from the inlined bytes alone, which made
+ * it a test of one thing: does a media element's request reach the worker? On
+ * WebKit that question has the wrong answer. The request *does* arrive, so the
+ * probe passed, and then every real video failed, because a service worker on
+ * WebKit cannot read a `CryptoKey` back out of IndexedDB: `getAllKeys()` lists
+ * the record and `get()` on the very same key returns `undefined`. The staged
+ * fallback existed and was never reached. See docs/DECISIONS.md D31.
+ *
+ * So the probe now walks the same path a real stream walks -- read the record
+ * for this media id, use its key -- and only then serves the file. The page
+ * publishes a throwaway record before probing and deletes it afterwards.
  *
  * Range support matters even here: some browsers will not treat a resource as
  * seekable, and will refuse to load it at all, unless the first response
- * advertises `Accept-Ranges` and honours a range request.
+ * advertises `Accept-Ranges` and honours a range request. The body is streamed
+ * for the same reason: it is what a real response is made of.
  */
-function serveProbe(request: Request): Response {
+async function serveProbe(request: Request): Promise<Response> {
+  const record = await getStreamRecord(PROBE_MEDIA_ID)
+  if (!record || !(await keyIsUsable(record.key))) {
+    return problem(404, 'The worker cannot read stream keys in this browser')
+  }
+
   const bytes = probeMp4Bytes()
   const parsed = parseRangeHeader(request.headers.get('Range'), bytes.length)
   const headers = new Headers({
@@ -156,11 +177,43 @@ function serveProbe(request: Request): Response {
     const slice = bytes.subarray(start, end + 1)
     headers.set('Content-Length', String(slice.length))
     headers.set('Content-Range', contentRange(parsed.range, bytes.length))
-    return new Response(slice as BlobPart, { status: 206, headers })
+    return new Response(streamOf(slice), { status: 206, headers })
   }
 
   headers.set('Content-Length', String(bytes.length))
-  return new Response(bytes as BlobPart, { status: 200, headers })
+  return new Response(streamOf(bytes), { status: 200, headers })
+}
+
+/**
+ * Not `record.key instanceof CryptoKey`: a key that survives the round trip as
+ * an object but cannot be used is the same failure with a friendlier disguise.
+ * One AES-GCM operation settles it.
+ */
+async function keyIsUsable(key: CryptoKey): Promise<boolean> {
+  try {
+    await crypto.subtle.encrypt({ name: 'AES-GCM', iv: new Uint8Array(12) }, key, new Uint8Array(1))
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Serve a buffer the way real media is served: as a stream, in pieces. */
+function streamOf(bytes: Uint8Array): ReadableStream<Uint8Array> {
+  const half = Math.max(1, Math.ceil(bytes.length / 2))
+  let sent = 0
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (sent >= bytes.length) {
+        controller.close()
+        return
+      }
+      const end = Math.min(sent + half, bytes.length)
+      controller.enqueue(bytes.subarray(sent, end))
+      sent = end
+      if (sent >= bytes.length) controller.close()
+    },
+  })
 }
 
 /**

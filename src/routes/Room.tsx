@@ -1,8 +1,19 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { ArrowLeft, Crown, Lock, LockOpen, Pause, Play, RefreshCw, UserMinus } from 'lucide-react'
+import {
+  ArrowLeft,
+  Crown,
+  Hand,
+  Lock,
+  LockOpen,
+  Pause,
+  Play,
+  RefreshCw,
+  UserMinus,
+} from 'lucide-react'
 import { Avatar } from '@/components/ui/Avatar'
 import { Button } from '@/components/ui/Button'
+import { HoldToUnlock, UnlockButton } from '@/components/player/HoldToUnlock'
 import { formatDuration } from '@/lib/format'
 import { openStream, type OpenStream } from '@/lib/media/playback'
 import {
@@ -10,11 +21,21 @@ import {
   inviteToRoom,
   setControlMode,
   setMemberState,
+  setRequireHold,
   type RoomMember,
 } from '@/lib/sync/room'
 import { useFriends } from '@/hooks/useFriends'
 import { useRoom } from '@/hooks/useRoom'
 import { useSession } from '@/stores/sessionStore'
+
+/**
+ * How long unlocked controls stay unlocked with nobody touching them.
+ *
+ * Long enough to play, scrub, and change your mind; short enough that a phone
+ * put down mid-film is locked again by the time it is picked back up, which is
+ * exactly when a pocket or a knee is most likely to press the screen.
+ */
+const RELOCK_AFTER_MS = 12_000
 
 export function Room() {
   const { roomId = '' } = useParams()
@@ -43,11 +64,40 @@ export function Room() {
   const [duration, setDuration] = useState(0)
   const [position, setPosition] = useState(0)
   const [dismissedAt, setDismissedAt] = useState(0)
+  const [unlocked, setUnlocked] = useState(false)
+  // Bumped by every use of the controls, to restart the re-lock countdown.
+  const [lastTouchedAt, setLastTouchedAt] = useState(0)
 
   const isOwner = room?.ownerId === userId
-  const locked = room?.controlMode === 'owner_only'
-  const canControl = !locked || isOwner || self?.canControl === true
+  const ownerOnly = room?.controlMode === 'owner_only'
+  const canControl = !ownerOnly || isOwner || self?.canControl === true
   const joined = self?.state === 'joined'
+
+  // Phase 6. The room's setting, not the viewer's: an accidental tap costs
+  // everyone in the room, so it is not one person's decision to opt out of.
+  const requireHold = room?.requireHold ?? true
+  const controlsOpen = !requireHold || unlocked
+
+  // Re-lock on its own. An unlocked player left alone is the state this whole
+  // phase exists to avoid, so it is not allowed to persist.
+  useEffect(() => {
+    if (!unlocked) return
+    const timer = setTimeout(() => setUnlocked(false), RELOCK_AFTER_MS)
+    return () => clearTimeout(timer)
+  }, [unlocked, lastTouchedAt])
+
+  // The owner turning the lock back on takes effect everywhere immediately,
+  // rather than waiting out somebody else's countdown. Adjusted during render
+  // rather than in an effect: it is derived from a value that just changed, and
+  // an effect would render the unlocked controls once before taking them away.
+  const [lockSetting, setLockSetting] = useState(requireHold)
+  if (lockSetting !== requireHold) {
+    setLockSetting(requireHold)
+    if (requireHold) setUnlocked(false)
+  }
+
+  // Every deliberate use of the controls is also a reason not to re-lock yet.
+  const touched = () => setLastTouchedAt(Date.now())
 
   // Open the media once the room tells us which media it is.
   useEffect(() => {
@@ -106,7 +156,7 @@ export function Room() {
           <ArrowLeft className="size-4" aria-hidden />
           Library
         </Link>
-        {locked && (
+        {ownerOnly && (
           <span className="inline-flex items-center gap-1.5 text-xs text-lamp-500">
             <Lock className="size-3.5" aria-hidden />
             Owner controls only
@@ -139,41 +189,67 @@ export function Room() {
             <p className="text-sm text-danger-500">{streamError ?? syncError}</p>
           </div>
         )}
+
+        {/* The gesture only exists for people who could act on it: a viewer in
+            an owner-only room has nothing to unlock. It also owns the whole
+            video surface while it is mounted, which is the contract Phase 7's
+            canvas inherits -- see docs/DECISIONS.md D32. */}
+        {joined && canControl && requireHold && !unlocked && (
+          <HoldToUnlock onUnlock={() => setUnlocked(true)} />
+        )}
       </div>
 
       {!joined ? (
         <Button onClick={() => void join()}>Join this room</Button>
-      ) : (
+      ) : !canControl ? (
+        // Owner-only mode. There is nothing behind the lock for this viewer, so
+        // showing them a way through it would only be a lie.
+        <Transport playing={playing} position={position} duration={duration} disabled />
+      ) : controlsOpen ? (
         <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={playing ? pause : play}
-            disabled={!canControl}
-            aria-label={playing ? 'Pause' : 'Play'}
-            className="inline-flex size-12 shrink-0 items-center justify-center rounded-xl bg-lamp-500 text-ink-950 hover:bg-lamp-400 disabled:opacity-45"
-          >
-            {playing ? (
-              <Pause className="size-5" aria-hidden />
-            ) : (
-              <Play className="size-5" aria-hidden />
-            )}
-          </button>
-
-          <input
-            type="range"
-            min={0}
-            max={duration || 0}
-            step="any"
-            value={position}
-            onChange={(e) => seek(Number(e.target.value) * 1000)}
-            disabled={!canControl || duration === 0}
-            aria-label="Seek"
-            className="h-11 flex-1 accent-lamp-500 disabled:opacity-45"
+          <Transport
+            playing={playing}
+            position={position}
+            duration={duration}
+            onToggle={() => {
+              touched()
+              if (playing) pause()
+              else play()
+            }}
+            onSeek={(seconds) => {
+              touched()
+              seek(seconds * 1000)
+            }}
           />
-
-          <p className="shrink-0 font-mono text-xs text-ink-500 tabular-nums">
-            {formatDuration(position * 1000)} / {formatDuration(duration * 1000)}
+          {requireHold && (
+            <button
+              type="button"
+              onClick={() => setUnlocked(false)}
+              aria-label="Lock the controls"
+              className="inline-flex size-11 shrink-0 items-center justify-center rounded-xl text-ink-500 hover:text-ink-100"
+            >
+              <Lock className="size-4" aria-hidden />
+            </button>
+          )}
+        </div>
+      ) : (
+        // Two rows rather than one wrapping row: at 375px the sentence and the
+        // button fight for the same line and the message breaks into four.
+        <div className="flex flex-col gap-2">
+          <p className="flex items-center gap-2 text-sm text-ink-500">
+            <Lock className="size-4 shrink-0" aria-hidden />
+            Controls locked — hold the video for 3 seconds
           </p>
+          <div className="flex items-center gap-3">
+            <p className="font-mono text-xs text-ink-500 tabular-nums">
+              {formatDuration(position * 1000)} / {formatDuration(duration * 1000)}
+            </p>
+            {/* Not everyone can hold a button for three seconds. This is the
+                same action, one press, and it is never hidden. */}
+            <div className="ml-auto">
+              <UnlockButton onUnlock={() => setUnlocked(true)} />
+            </div>
+          </div>
         </div>
       )}
 
@@ -212,15 +288,23 @@ export function Room() {
             </button>
             <button
               type="button"
-              onClick={() => void setControlMode(roomId, locked ? 'open' : 'owner_only')}
+              onClick={() => void setControlMode(roomId, ownerOnly ? 'open' : 'owner_only')}
               className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-ink-850 px-3 text-sm text-ink-100 hover:bg-ink-800"
             >
-              {locked ? (
+              {ownerOnly ? (
                 <LockOpen className="size-4" aria-hidden />
               ) : (
                 <Lock className="size-4" aria-hidden />
               )}
-              {locked ? 'Let anyone control' : 'Lock to me'}
+              {ownerOnly ? 'Let anyone control' : 'Lock to me'}
+            </button>
+            <button
+              type="button"
+              onClick={() => void setRequireHold(roomId, !requireHold)}
+              className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-ink-850 px-3 text-sm text-ink-100 hover:bg-ink-800"
+            >
+              <Hand className="size-4" aria-hidden />
+              {requireHold ? 'Stop requiring a hold' : 'Require a 3s hold'}
             </button>
             <button
               type="button"
@@ -258,6 +342,63 @@ export function Room() {
         Clock accurate to about {clockUncertaintyMs}ms. Everyone follows server time, not their own.
       </p>
     </main>
+  )
+}
+
+/**
+ * The transport, in one place, because it is rendered both live and inert and
+ * the two must not drift apart. Without handlers it renders disabled, which is
+ * what a viewer in an owner-only room sees.
+ */
+function Transport({
+  playing,
+  position,
+  duration,
+  disabled = false,
+  onToggle,
+  onSeek,
+}: {
+  playing: boolean
+  position: number
+  duration: number
+  disabled?: boolean
+  onToggle?: () => void
+  onSeek?: (seconds: number) => void
+}) {
+  const inert = disabled || !onToggle
+
+  return (
+    <div className="flex flex-1 items-center gap-3">
+      <button
+        type="button"
+        onClick={onToggle}
+        disabled={inert}
+        aria-label={playing ? 'Pause' : 'Play'}
+        className="inline-flex size-12 shrink-0 items-center justify-center rounded-xl bg-lamp-500 text-ink-950 hover:bg-lamp-400 disabled:opacity-45"
+      >
+        {playing ? (
+          <Pause className="size-5" aria-hidden />
+        ) : (
+          <Play className="size-5" aria-hidden />
+        )}
+      </button>
+
+      <input
+        type="range"
+        min={0}
+        max={duration || 0}
+        step="any"
+        value={position}
+        onChange={(event) => onSeek?.(Number(event.target.value))}
+        disabled={inert || duration === 0}
+        aria-label="Seek"
+        className="h-11 flex-1 accent-lamp-500 disabled:opacity-45"
+      />
+
+      <p className="shrink-0 font-mono text-xs text-ink-500 tabular-nums">
+        {formatDuration(position * 1000)} / {formatDuration(duration * 1000)}
+      </p>
+    </div>
   )
 }
 

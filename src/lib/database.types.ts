@@ -280,6 +280,7 @@ export type Database = {
           media_id: string
           owner_id: string
           position_ms: number
+          require_hold: boolean
           seq: number
           status: string
         }
@@ -294,6 +295,7 @@ export type Database = {
           media_id: string
           owner_id: string
           position_ms?: number
+          require_hold?: boolean
           seq?: number
           status?: string
         }
@@ -308,6 +310,7 @@ export type Database = {
           media_id?: string
           owner_id?: string
           position_ms?: number
+          require_hold?: boolean
           seq?: number
           status?: string
         }
