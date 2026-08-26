@@ -192,6 +192,39 @@ describe('the owner controls', () => {
   })
 })
 
+describe('an element that cannot start on its own', () => {
+  it('offers one press, over the top of everything else', () => {
+    const onStart = vi.fn()
+    renderShell({ shared: true, needsGesture: true, onStart })
+    fireEvent.click(screen.getByRole('button', { name: /Tap to join the film/ }))
+    expect(onStart).toHaveBeenCalled()
+  })
+
+  it('offers it to a viewer who may not control the session', () => {
+    // It starts their own element and sends nothing to anybody, so "you may not
+    // drive" must not become "you may not watch". On iOS this is the only way
+    // a video ever loads, so withholding it strands them at 0:00 for ever.
+    const onStart = vi.fn()
+    renderShell({ shared: true, canControl: false, needsGesture: true, onStart })
+    expect(screen.getByRole('button', { name: /Tap to join the film/ })).toBeEnabled()
+  })
+
+  it('says something different when nobody else is watching', () => {
+    renderShell({ shared: false, needsGesture: true, onStart: vi.fn() })
+    expect(screen.getByRole('button', { name: /Tap to start/ })).toBeInTheDocument()
+  })
+
+  it('is absent while the video is still being decrypted', () => {
+    renderShell({ needsGesture: true, onStart: vi.fn(), status: { kind: 'opening' } })
+    expect(screen.queryByRole('button', { name: /Tap to/ })).not.toBeInTheDocument()
+  })
+
+  it('is absent once the element is going by itself', () => {
+    renderShell({ shared: true, needsGesture: false, onStart: vi.fn() })
+    expect(screen.queryByRole('button', { name: /Tap to/ })).not.toBeInTheDocument()
+  })
+})
+
 describe('a viewer who may not touch the controls', () => {
   it('gets a transport that is visibly there and inert', () => {
     const { onToggle } = renderShell({ shared: true, canControl: false })

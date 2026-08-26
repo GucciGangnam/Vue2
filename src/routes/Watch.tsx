@@ -136,6 +136,8 @@ function Together({ mediaId, roomId }: { mediaId: string; roomId: string }) {
     seek,
     forceSync,
     join,
+    needsGesture,
+    startPlayback,
   } = useRoom(roomId)
 
   const { friends } = useFriends(userId)
@@ -271,6 +273,8 @@ function Together({ mediaId, roomId }: { mediaId: string; roomId: string }) {
           ? 'The owner is driving. You can watch, but not touch the controls.'
           : connectionMessage(connection)
       }
+      needsGesture={needsGesture}
+      onStart={startPlayback}
       onToggle={(shouldPlay) => (shouldPlay ? play() : pause())}
       onSeek={(seconds) => seek(seconds * 1000)}
       footnote={<StreamNote status={stream.status} />}

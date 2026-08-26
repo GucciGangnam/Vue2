@@ -9,6 +9,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { canPosition, needsUserGesture } from '@/lib/player/element'
 import { ClockOffset } from '@/lib/sync/clock'
 import {
   nextConnectionState,
@@ -82,6 +83,17 @@ export interface RoomSync {
   clockUncertaintyMs: number
   /** "Ada paused" — resolved against the roster during render. */
   lastAction: { actorName: string; isPlaying: boolean; at: number } | null
+  /**
+   * This element will not start on its own and needs one deliberate press.
+   *
+   * On iOS a media element that has never been played by a user gesture does
+   * not load *at all* -- `networkState` sits at `NETWORK_IDLE`, `buffered` is
+   * empty, `readyState` stays at 1, and even a seek is accepted and then left
+   * pending for ever. Nothing the page does by itself can move it.
+   */
+  needsGesture: boolean
+  /** Start this viewer's own element. Must be called from a real user gesture. */
+  startPlayback: () => void
   play: () => void
   pause: () => void
   seek: (positionMs: number) => void
@@ -106,6 +118,7 @@ export function useRoom(roomId: string): RoomSync {
   } | null>(null)
   const [clockUncertaintyMs, setClockUncertaintyMs] = useState(0)
   const [connection, setConnection] = useState<ConnectionState>('connecting')
+  const [needsGesture, setNeedsGesture] = useState(false)
 
   // Owned here rather than taken as an argument: this hook is the only thing
   // that drives the element, and mutating a ref handed in from outside is both
@@ -122,6 +135,7 @@ export function useRoom(roomId: string): RoomSync {
   // Read by the drift interval, which must not be torn down and rebuilt every
   // time the roster changes just to know this.
   const mayControl = useRef(false)
+  const gestureNeeded = useRef(false)
 
   /**
    * Put the element where the anchor says it should be, right now.
@@ -385,7 +399,43 @@ export function useRoom(roomId: string): RoomSync {
     const timer = setInterval(() => {
       const element = video.current
       const current = anchor.current
-      if (!element || !current || element.seeking || element.readyState < 2) return
+      if (!element || !current) return
+
+      // Is this element going to get anywhere on its own? Three ways it will
+      // not: it holds no data to show, the session is playing and it is not, or
+      // a seek was accepted and is still pending. All three are the ordinary
+      // state of affairs on iOS until somebody presses something, and none is
+      // reachable from here -- `play()` called from a timer is not a user
+      // gesture, so it is refused and the element never loads a byte. The
+      // interface has to ask.
+      //
+      // Checked *before* the guards below, and deliberately: a wedged seek
+      // makes `element.seeking` true for ever, so anything after that guard
+      // would never run on the one platform this exists for.
+      const stalled = needsUserGesture({
+        readyState: element.readyState,
+        paused: element.paused,
+        sessionPlaying: current.isPlaying,
+      })
+      if (stalled !== gestureNeeded.current) {
+        gestureNeeded.current = stalled
+        setNeedsGesture(stalled)
+      }
+
+      // Never position an element that holds no data. This looks like an
+      // over-cautious guard and is the opposite: seeking a WebKit element that
+      // is sitting at NETWORK_IDLE **wedges it permanently**. Measured on the
+      // Simulator -- the assignment is accepted, `seeking` goes true, and it
+      // stays true for ever afterwards, including once the tap has arrived and
+      // `buffered` covers the target: `t=171.6 rs=4 ns=2 seek=true
+      // buf=[0-749]`. The element never recovers and the drift loop, whose
+      // first guard is `seeking`, never runs again either.
+      //
+      // So the answer to "this viewer is at 0:00" is not a more eager seek. It
+      // is `needsGesture` above: get the element loading first, by the only
+      // means iOS accepts, and position it once it can actually service the
+      // request.
+      if (element.seeking || !canPosition(element.readyState)) return
 
       const total = durationMs(element)
 
@@ -442,9 +492,52 @@ export function useRoom(roomId: string): RoomSync {
     return () => clearInterval(timer)
   }, [act])
 
-  const attachVideo = useCallback((element: HTMLVideoElement | null) => {
-    video.current = element
-  }, [])
+  const applyCurrentAnchor = useCallback(() => {
+    const current = anchor.current
+    if (current) applyAnchor(current, true)
+  }, [applyAnchor])
+
+  /**
+   * The element arrives long after the room does — on WebKit the whole file is
+   * decrypted before there is anything to attach at all — so the anchor applied
+   * when the room loaded had nothing to apply itself to and was simply lost.
+   * Put the element where the room is as soon as it can actually go there.
+   */
+  const attachVideo = useCallback(
+    (element: HTMLVideoElement | null) => {
+      video.current?.removeEventListener('canplay', applyCurrentAnchor)
+      video.current = element
+      if (!element) return
+      // `canplay`, not `loadedmetadata`: metadata arrives while the element
+      // still holds no data, and positioning it in that state is what wedges
+      // WebKit. This fires on the far side of the tap.
+      element.addEventListener('canplay', applyCurrentAnchor)
+      if (canPosition(element.readyState)) applyCurrentAnchor()
+    },
+    [applyCurrentAnchor],
+  )
+
+  /**
+   * Start this viewer's own playback, and only theirs.
+   *
+   * Deliberately not a room action: it sends nothing, so a viewer who may not
+   * control playback can still press it. It is the difference between "start
+   * the film for everybody" and "my phone has not loaded the film yet", and on
+   * iOS every viewer needs the second one at least once.
+   *
+   * `play()` has to be called synchronously inside the gesture; anything
+   * awaited first loses the activation. The anchor is re-applied afterwards,
+   * which puts them in the right place and pauses them again if the session is
+   * paused.
+   */
+  const startPlayback = useCallback(() => {
+    const element = video.current
+    if (!element) return
+    void element
+      .play()
+      .then(applyCurrentAnchor)
+      .catch(() => {})
+  }, [applyCurrentAnchor])
 
   const positionNow = useCallback(() => {
     const element = video.current
@@ -469,6 +562,8 @@ export function useRoom(roomId: string): RoomSync {
     connection,
     clockUncertaintyMs,
     lastAction,
+    needsGesture,
+    startPlayback,
     // A finished film restarts rather than sitting on the last frame doing
     // nothing, which is what pressing play plainly promises. The element would
     // do this by itself -- play() on an ended element seeks to zero -- but the

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowLeft, Loader2, type LucideIcon } from 'lucide-react'
+import { ArrowLeft, Loader2, Play, type LucideIcon } from 'lucide-react'
 import { Drawer } from '@/components/player/Drawer'
 import { Transport } from '@/components/player/Transport'
 import { useReveal } from '@/hooks/useReveal'
@@ -52,6 +52,8 @@ export function PlayerShell({
   toast,
   error,
   footnote,
+  needsGesture = false,
+  onStart,
 }: {
   title: string
   subtitle?: string | null
@@ -68,6 +70,9 @@ export function PlayerShell({
   toast?: string | null
   error?: string | null
   footnote?: ReactNode
+  /** This element will not start on its own; ask for one press. */
+  needsGesture?: boolean
+  onStart?: () => void
 }) {
   const video = useRef<HTMLVideoElement | null>(null)
   const frame = useRef<HTMLDivElement | null>(null)
@@ -180,6 +185,27 @@ export function PlayerShell({
             <Link to="/library" className="text-sm text-lamp-500 hover:underline">
               Back to your videos
             </Link>
+          </div>
+        )}
+
+        {/* iOS will not load a video that has never been played by a user
+            gesture -- `networkState` stays NETWORK_IDLE, nothing buffers, and a
+            seek is accepted and left pending for ever. So there has to be
+            something to press, and it has to be offered to *every* viewer:
+            this starts their own element and sends nothing to anybody, so a
+            viewer who may not control the session still needs it and still
+            gets it. Sits above the chrome, because it is the one thing on
+            screen that must not fade away. */}
+        {needsGesture && onStart && status.kind === 'ready' && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <button
+              type="button"
+              onClick={onStart}
+              className="inline-flex items-center gap-3 rounded-full bg-lamp-500 py-3 pr-6 pl-4 text-base font-medium text-ink-950 shadow-lg transition-colors hover:bg-lamp-400"
+            >
+              <Play className="size-6 translate-x-px" aria-hidden />
+              {shared ? 'Tap to join the film' : 'Tap to start'}
+            </button>
           </div>
         )}
 
