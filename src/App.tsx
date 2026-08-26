@@ -1,10 +1,10 @@
 import { useEffect } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { Loader2 } from 'lucide-react'
-import { PlaceholderScreen } from './components/PlaceholderScreen'
 import { Friends } from './routes/Friends'
 import { Library } from './routes/Library'
 import { Player } from './routes/Player'
+import { Room } from './routes/Room'
 import { RecoveryPhrase } from './routes/RecoveryPhrase'
 import { SignIn } from './routes/SignIn'
 import { SignUp } from './routes/SignUp'
@@ -57,10 +57,7 @@ export default function App() {
       <Route path="/library" element={<Library />} />
       <Route path="/friends" element={<Friends />} />
       <Route path="/watch/:mediaId" element={<Player />} />
-      <Route
-        path="/room/:roomId"
-        element={<PlaceholderScreen title="Room" phase="Phase 5 — Rooms & sync" />}
-      />
+      <Route path="/room/:roomId" element={<Room />} />
       <Route path="*" element={<Navigate to="/library" replace />} />
     </Routes>
   )

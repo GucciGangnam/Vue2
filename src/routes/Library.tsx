@@ -1,12 +1,25 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Link } from 'react-router-dom'
-import { AlertTriangle, Film, Loader2, Play, Share2, Trash2, Upload, Users, X } from 'lucide-react'
+import {
+  AlertTriangle,
+  Film,
+  Loader2,
+  Play,
+  Share2,
+  Trash2,
+  Tv,
+  Upload,
+  Users,
+  X,
+} from 'lucide-react'
 import { Avatar } from '@/components/ui/Avatar'
 import { Button } from '@/components/ui/Button'
 import { Screen } from '@/components/ui/Screen'
 import { TextField } from '@/components/ui/TextField'
 import { useFriends } from '@/hooks/useFriends'
 import { useLibrary, useShares, useUpload } from '@/hooks/useLibrary'
+import { useRooms } from '@/hooks/useRooms'
 import { formatBytes, formatDuration, formatPercent } from '@/lib/format'
 import type { LibraryItem } from '@/lib/media/library'
 import type { UploadProgress } from '@/lib/media/upload'
@@ -24,7 +37,16 @@ export function Library() {
   const signOut = useSession((s) => s.signOut)
   const { items, isLoading, error, refresh, remove, share, revoke } = useLibrary()
   const upload = useUpload(refresh)
+  const { rooms, start } = useRooms()
+  const navigate = useNavigate()
   const [sharing, setSharing] = useState<LibraryItem | null>(null)
+
+  const openRooms = rooms.filter((room) => room.myState !== 'left' && room.myState !== 'kicked')
+
+  async function watchTogether(item: LibraryItem) {
+    const roomId = await start.mutateAsync(item.id)
+    void navigate(`/room/${roomId}`)
+  }
 
   return (
     <Screen className="justify-start gap-7">
@@ -47,6 +69,34 @@ export function Library() {
       </header>
 
       <UploadPanel upload={upload} />
+
+      {openRooms.length > 0 && (
+        <section className="flex flex-col gap-2">
+          <h2 className="text-sm font-medium text-ink-500">Rooms</h2>
+          <ul className="flex flex-col gap-2">
+            {openRooms.map((room) => {
+              const item = items.find((candidate) => candidate.id === room.mediaId)
+              return (
+                <li key={room.id}>
+                  <Link
+                    to={`/room/${room.id}`}
+                    className="flex items-center gap-3 rounded-xl bg-ink-900 p-3 hover:bg-ink-850"
+                  >
+                    <Tv className="size-5 shrink-0 text-lamp-500" aria-hidden />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-base text-ink-100">{item?.title ?? 'A video'}</p>
+                      <p className="text-xs text-ink-500">
+                        {room.myState === 'invited' ? 'You were invited' : 'You are in this room'}
+                        {room.isPlaying && ' · playing'}
+                      </p>
+                    </div>
+                  </Link>
+                </li>
+              )
+            })}
+          </ul>
+        </section>
+      )}
 
       {error && (
         <p role="alert" className="text-sm text-danger-500">
@@ -74,6 +124,7 @@ export function Library() {
               item={item}
               busy={remove.isPending}
               onShare={() => setSharing(item)}
+              onWatchTogether={() => void watchTogether(item)}
               onDelete={() => remove.mutate(item)}
               onResume={(file) => upload.resume(item.id, file)}
             />
@@ -217,12 +268,14 @@ function MediaCard({
   item,
   busy,
   onShare,
+  onWatchTogether,
   onDelete,
   onResume,
 }: {
   item: LibraryItem
   busy: boolean
   onShare: () => void
+  onWatchTogether: () => void
   onDelete: () => void
   onResume: (file: File) => void
 }) {
@@ -298,6 +351,17 @@ function MediaCard({
                 Finish upload
               </button>
             </>
+          )}
+
+          {item.status === 'ready' && item.title && (
+            <button
+              type="button"
+              onClick={onWatchTogether}
+              className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-ink-850 px-3 text-sm text-ink-100 hover:bg-ink-800"
+            >
+              <Tv className="size-4" aria-hidden />
+              Watch together
+            </button>
           )}
 
           {item.isOwn && item.status === 'ready' && item.title && (

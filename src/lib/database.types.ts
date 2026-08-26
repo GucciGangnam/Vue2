@@ -223,6 +223,111 @@ export type Database = {
         }
         Relationships: []
       }
+      room_members: {
+        Row: {
+          can_control: boolean
+          invited_at: string
+          joined_at: string | null
+          role: string
+          room_id: string
+          state: string
+          user_id: string
+        }
+        Insert: {
+          can_control?: boolean
+          invited_at?: string
+          joined_at?: string | null
+          role?: string
+          room_id: string
+          state?: string
+          user_id: string
+        }
+        Update: {
+          can_control?: boolean
+          invited_at?: string
+          joined_at?: string | null
+          role?: string
+          room_id?: string
+          state?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'room_members_room_id_fkey'
+            columns: ['room_id']
+            isOneToOne: false
+            referencedRelation: 'rooms'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'room_members_user_id_fkey'
+            columns: ['user_id']
+            isOneToOne: false
+            referencedRelation: 'profiles'
+            referencedColumns: ['id']
+          },
+        ]
+      }
+      rooms: {
+        Row: {
+          anchor_server_time: string
+          control_mode: string
+          created_at: string
+          ended_at: string | null
+          id: string
+          is_playing: boolean
+          last_actor_id: string | null
+          media_id: string
+          owner_id: string
+          position_ms: number
+          seq: number
+          status: string
+        }
+        Insert: {
+          anchor_server_time?: string
+          control_mode?: string
+          created_at?: string
+          ended_at?: string | null
+          id?: string
+          is_playing?: boolean
+          last_actor_id?: string | null
+          media_id: string
+          owner_id: string
+          position_ms?: number
+          seq?: number
+          status?: string
+        }
+        Update: {
+          anchor_server_time?: string
+          control_mode?: string
+          created_at?: string
+          ended_at?: string | null
+          id?: string
+          is_playing?: boolean
+          last_actor_id?: string | null
+          media_id?: string
+          owner_id?: string
+          position_ms?: number
+          seq?: number
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: 'rooms_media_id_fkey'
+            columns: ['media_id']
+            isOneToOne: false
+            referencedRelation: 'media'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'rooms_owner_id_fkey'
+            columns: ['owner_id']
+            isOneToOne: false
+            referencedRelation: 'profiles'
+            referencedColumns: ['id']
+          },
+        ]
+      }
       user_private_keys: {
         Row: {
           kdf_params: Json
@@ -301,9 +406,23 @@ export type Database = {
       generate_friend_code: { Args: never; Returns: string }
       has_media_key: { Args: { p_media_id: string }; Returns: boolean }
       has_pending_request_with: { Args: { p_other: string }; Returns: boolean }
+      in_room: { Args: { p_room_id: string }; Returns: boolean }
       is_friend_of_caller: { Args: { p_other: string }; Returns: boolean }
       media_object_readable: { Args: { p_name: string }; Returns: boolean }
       owns_media: { Args: { p_media_id: string }; Returns: boolean }
+      owns_room: { Args: { p_room_id: string }; Returns: boolean }
+      server_now: { Args: never; Returns: string }
+      set_playback_state: {
+        Args: { p_room_id: string; p_action: string; p_position_ms: number }
+        Returns: {
+          anchor_server_time: string
+          is_playing: boolean
+          last_actor_id: string | null
+          position_ms: number
+          seq: number
+          server_time: string
+        }[]
+      }
     }
     Enums: { [_ in never]: never }
     CompositeTypes: { [_ in never]: never }
@@ -321,3 +440,5 @@ export type TablesUpdate<T extends keyof PublicSchema['Tables']> =
 export type Profile = Tables<'profiles'>
 export type MediaRow = Tables<'media'>
 export type MediaKeyRow = Tables<'media_keys'>
+export type RoomRow = Tables<'rooms'>
+export type RoomMemberRow = Tables<'room_members'>
